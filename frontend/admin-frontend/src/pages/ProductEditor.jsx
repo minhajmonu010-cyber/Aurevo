@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { addVariant, adjustStock, createProduct, deleteImage, deleteVariant, getProduct, listBrands, listCategories, updateImage, updateProduct, updateVariant, uploadImage } from "../api/admin";
 import DeleteProductDialog from "../components/DeleteProductDialog";
 import DropZone from "../components/DropZone";
+import ImageCropDialog from "../components/ImageCropDialog";
 import Icon from "../components/Icon";
 import { EmptyState, ErrorNote, Modal, Pill, Skeleton, Toggle } from "../components/ui";
 import { useToast } from "../context/ToastContext";
@@ -10,8 +11,10 @@ import { API_URL } from "../api/axios";
 import { formatDate, formatPrice, slugify, timeAgo } from "../utils/format";
 import { useLoad, useObjectUrl } from "../utils/hooks";
 import { parseApiError } from "../utils/errors";
+import { fetchImageFile } from "../utils/imageFiles";
 
 const SIZES = ["XS", "S", "M", "L", "XL", "XXL"];
+const MAX_PRODUCT_IMAGES = 3;
 const COLORS = [
   ["Black", "#111418"], ["White", "#f4f4f4"], ["Off-White", "#e8e3d3"], ["Navy", "#1f2c5c"], ["Olive", "#5b6b3a"],
   ["Beige", "#cdbf9f"], ["Grey", "#8a8f98"], ["Red", "#c0392b"], ["Sky Blue", "#7fb2e5"], ["Maroon", "#6b1f2b"],
@@ -64,6 +67,9 @@ export default function ProductEditor() {
   const [offerPrice, setOfferPrice] = useState("");
   const [variantStocks, setVariantStocks] = useState({});
   const [queued, setQueued] = useState([]);
+  const [cropQueue, setCropQueue] = useState([]);
+  const [loadingImageId, setLoadingImageId] = useState(null);
+  const [imageCountFloor, setImageCountFloor] = useState({ productId: null, count: 0 });
   const [customSize, setCustomSize] = useState("");
   const [customColor, setCustomColor] = useState("");
   const [errors, setErrors] = useState({});
@@ -85,7 +91,7 @@ export default function ProductEditor() {
   }, [product?.id]);
 
   const dirty = editing
-    ? JSON.stringify(form) !== baseline
+    ? JSON.stringify(form) !== baseline || cropQueue.length > 0
     : JSON.stringify({ form, sizes, colors, basePrice, offerPrice, variantStocks }) !==
         JSON.stringify({
           form: EMPTY,
@@ -94,7 +100,7 @@ export default function ProductEditor() {
           basePrice: "",
           offerPrice: "",
           variantStocks: {},
-        }) || queued.length > 0;
+        }) || queued.length > 0 || cropQueue.length > 0;
   useEffect(() => {
     const warn = (e) => dirty && !saving && e.preventDefault();
     window.addEventListener("beforeunload", warn);
@@ -214,18 +220,71 @@ export default function ProductEditor() {
     }
   };
 
-  // ---- edit mode: pictures
-  const addPictures = async (files) => {
+  const handleProductFiles = (files) => {
+    const available = Math.max(0, MAX_PRODUCT_IMAGES - imageCount);
+    if (files.length > available) {
+      setErrors((current) => ({ ...current, pictures: `A product can have up to ${MAX_PRODUCT_IMAGES} images.` }));
+    } else {
+      setErrors((current) => ({ ...current, pictures: "" }));
+    }
+    if (available > 0) {
+      setCropQueue((current) => [
+        ...current,
+        ...files.slice(0, available).map((file) => ({ id: crypto.randomUUID(), file })),
+      ]);
+    }
+  };
+  const uploadedFloor = imageCountFloor.productId === String(product?.id) ? imageCountFloor.count : 0;
+  const imageCount = Math.max(product?.images?.length || 0, uploadedFloor) + queued.length + cropQueue.length;
+  const finishCrop = async (file, imageId = null) => {
+    if (editing) {
+      try {
+        if (imageId) {
+          await updateImage(imageId, { image: file });
+          toast.show("Picture updated.", "ok");
+        } else {
+          await uploadImage(product.id, file, product.images.length === 0 && uploadedFloor === 0);
+          setImageCountFloor((current) => ({
+            productId: String(product.id),
+            count: Math.max(
+              product.images.length,
+              current.productId === String(product.id) ? current.count : 0
+            ) + 1,
+          }));
+          toast.show("Picture added.", "ok");
+        }
+        refresh();
+      } catch (err) {
+        throw new Error(err.response?.data?.image?.[0] || "A picture could not be uploaded.");
+      }
+    } else {
+      setQueued((current) => [...current, file]);
+    }
+    setCropQueue((current) => current.slice(1));
+  };
+  const cropExistingImage = async (image) => {
+    setLoadingImageId(image.id);
     try {
-      for (const file of files) await uploadImage(product.id, file, product.images.length === 0);
-      toast.show("Picture added.", "ok");
-      refresh();
-    } catch (err) {
-      toast.show(err.response?.data?.image?.[0] || "A picture could not be uploaded.", "bad");
+      const file = await fetchImageFile(image.image);
+      setCropQueue((current) => [
+        ...current,
+        { id: crypto.randomUUID(), file, imageId: image.id },
+      ]);
+    } catch (error) {
+      toast.show(error.message || "Could not open this image for cropping.", "bad");
+    } finally {
+      setLoadingImageId(null);
     }
   };
   const makeMain = async (image) => { await updateImage(image.id, { is_primary: true }); refresh(); };
-  const removePicture = async (image) => { await deleteImage(image.id); toast.show("Picture removed.", "ok"); refresh(); };
+  const removePicture = async (image) => {
+    await deleteImage(image.id);
+    setImageCountFloor((current) => current.productId === String(product.id)
+      ? { ...current, count: Math.max(0, current.count - 1) }
+      : current);
+    toast.show("Picture removed.", "ok");
+    refresh();
+  };
 
   // ---- edit mode: variants
   const rowValue = (v, key) => (edits[v.id]?.[key] !== undefined ? edits[v.id][key] : v[key] ?? "");
@@ -441,9 +500,10 @@ export default function ProductEditor() {
 
           <section className="ad-card ad-card-pad">
             <div className="ad-section-title"><Icon name="image-plus" size={18} /> Product pictures</div>
-            <p className="ad-section-sub">The main picture is shown first in the shop. JPG, PNG or WebP up to 5 MB each.</p>
-            <DropZone multiple compact title="Drop pictures here, or" onError={(m) => setErrors((x) => ({ ...x, pictures: m }))}
-              onFiles={(files) => (editing ? addPictures(files) : setQueued((q) => [...q, ...files]))} />
+            <p className="ad-section-sub">Crop each picture before adding it. The main picture is shown first in the shop. Add up to {MAX_PRODUCT_IMAGES} images; JPG, PNG or WebP up to 5 MB each.</p>
+            <p className="ad-hint">{imageCount} / {MAX_PRODUCT_IMAGES} pictures added</p>
+            <DropZone multiple compact disabled={imageCount >= MAX_PRODUCT_IMAGES || cropQueue.length > 0} title="Drop pictures here, or" onError={(m) => setErrors((x) => ({ ...x, pictures: m }))}
+              onFiles={handleProductFiles} />
             {errors.pictures && <p className="ad-field-error" style={{ marginTop: 8 }}>{errors.pictures}</p>}
             <div className="ad-gallery">
               {editing
@@ -452,6 +512,7 @@ export default function ProductEditor() {
                       <img src={img.image} alt="" />
                       {img.is_primary && <span className="tag">Main</span>}
                       <div className="tools">
+                        <button type="button" onClick={() => cropExistingImage(img)} disabled={loadingImageId !== null || cropQueue.length > 0} title="Edit picture" aria-label="Edit picture"><Icon name="crop" size={13} /></button>
                         {!img.is_primary && <button type="button" onClick={() => makeMain(img)} title="Make main picture" aria-label="Make main picture"><Icon name="star" size={13} /></button>}
                         <button type="button" onClick={() => removePicture(img)} title="Remove" aria-label="Remove picture"><Icon name="trash" size={13} /></button>
                       </div>
@@ -509,6 +570,14 @@ export default function ProductEditor() {
 
     </form>
 
+      {cropQueue[0] && (
+        <ImageCropDialog
+          key={cropQueue[0].id}
+          file={cropQueue[0].file}
+          onCancel={() => setCropQueue((current) => current.slice(1))}
+          onComplete={(file) => finishCrop(file, cropQueue[0].imageId)}
+        />
+      )}
       {stockFor && <StockModal variant={stockFor} onClose={() => setStockFor(null)} onDone={() => { setStockFor(null); refresh(); }} />}
       {variantDelete && (
         <Modal title="Delete this size?" tone="danger" width={420} onClose={() => setVariantDelete(null)}

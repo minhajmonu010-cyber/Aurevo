@@ -4,6 +4,7 @@ import tempfile
 from decimal import Decimal
 
 from django.core.cache import cache
+from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from PIL import Image
@@ -208,11 +209,22 @@ class CategoryAdminTests(CatalogAdminBase):
         r = self.client.post(f"{BASE}/categories/", {"name": "With Photo", "image": picture()}, format="multipart")
         self.assertEqual(r.status_code, 201, r.data)
         self.assertTrue(r.data["image"].startswith("http"))
+        category = Category.objects.get(pk=r.data["id"])
+        old_image = category.image.name
+        replaced = self.client.patch(
+            f"{BASE}/categories/{category.pk}/",
+            {"image": picture("replacement.png", color=(10, 20, 30))},
+            format="multipart",
+        )
+        self.assertEqual(replaced.status_code, 200, replaced.data)
+        category.refresh_from_db()
+        self.assertNotEqual(category.image.name, old_image)
+        self.assertFalse(default_storage.exists(old_image))
         bad = self.client.post(f"{BASE}/categories/", {"name": "Bad", "image": SimpleUploadedFile("a.txt", b"hello", "text/plain")}, format="multipart")
         self.assertEqual(bad.status_code, 400)
-        gone = self.client.patch(f"{BASE}/categories/{r.data['id']}/", {"remove_image": True}, format="multipart")
+        gone = self.client.patch(f"{BASE}/categories/{category.pk}/", {"remove_image": True}, format="multipart")
         self.assertEqual(gone.status_code, 200)
-        self.assertFalse(Category.objects.get(pk=r.data["id"]).image)
+        self.assertFalse(Category.objects.get(pk=category.pk).image)
 
     def test_blocking_a_category_hides_it_and_its_products_from_shoppers(self):
         c = self.category("Linen")
@@ -236,6 +248,53 @@ class ProductAdminTests(CatalogAdminBase):
     def create(self, **extra):
         body = {"name": "Heavyweight Boxy Tee", "category": self.cat.pk, "sku": "oft-tee-043", **extra}
         return self.client.post(f"{BASE}/products/", body, format="json")
+
+    def test_product_accepts_at_most_three_images(self):
+        product = self.product(self.cat)
+        endpoint = f"{BASE}/products/{product.pk}/images/"
+
+        for index in range(3):
+            response = self.client.post(
+                endpoint,
+                {"image": picture(f"photo-{index}.png")},
+                format="multipart",
+            )
+            self.assertEqual(response.status_code, 201, response.data)
+
+        extra = self.client.post(endpoint, {"image": picture("extra.png")}, format="multipart")
+        self.assertEqual(extra.status_code, 400, extra.data)
+        self.assertIn("image", extra.data)
+        self.assertEqual(product.images.count(), 3)
+
+        first_image = product.images.first()
+        self.assertEqual(self.client.delete(f"{BASE}/images/{first_image.pk}/").status_code, 204)
+        replacement = self.client.post(endpoint, {"image": picture("replacement.png")}, format="multipart")
+        self.assertEqual(replacement.status_code, 201, replacement.data)
+        self.assertEqual(product.images.count(), 3)
+
+    def test_existing_product_image_can_be_replaced(self):
+        product = self.product(self.cat)
+        created = self.client.post(
+            f"{BASE}/products/{product.pk}/images/",
+            {"image": picture("before.png")},
+            format="multipart",
+        )
+        self.assertEqual(created.status_code, 201, created.data)
+        image = ProductImage.objects.get(pk=created.data["id"])
+        old_name = image.image.name
+
+        updated = self.client.patch(
+            f"{BASE}/images/{image.pk}/",
+            {"image": picture("after.png", color=(10, 20, 30))},
+            format="multipart",
+        )
+
+        self.assertEqual(updated.status_code, 200, updated.data)
+        image.refresh_from_db()
+        self.assertNotEqual(image.image.name, old_name)
+        self.assertTrue(default_storage.exists(image.image.name))
+        self.assertFalse(default_storage.exists(old_name))
+        self.assertEqual(product.images.count(), 1)
 
     def test_create_with_variants_makes_skus_and_stock_logs(self):
         r = self.create(

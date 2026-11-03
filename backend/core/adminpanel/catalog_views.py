@@ -243,6 +243,9 @@ class AdminProductViewSet(AdminBase, viewsets.ModelViewSet):
         serializer = AdminImageSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         with transaction.atomic():
+            product = Product.objects.select_for_update().get(pk=product.pk)
+            if product.images.count() >= 3:
+                raise ValidationError({"image": "A product can have up to 3 images."})
             # the first picture is the main one; later ones only if asked
             make_primary = bool(serializer.validated_data.get("is_primary")) or not product.images.exists()
             if make_primary:

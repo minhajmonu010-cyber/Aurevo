@@ -5,11 +5,12 @@ export const MAX_MB = 5;
 const TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 /** Drag and drop (or click) to choose pictures. Checks the type and size, then calls onFiles(validFiles). */
-export default function DropZone({ onFiles, multiple = false, title = "Drag & drop a picture, or", hint, compact = false, onError }) {
+export default function DropZone({ onFiles, multiple = false, title = "Drag & drop a picture, or", hint, compact = false, onError, disabled = false }) {
   const input = useRef(null);
   const [over, setOver] = useState(false);
 
   const take = (list) => {
+    if (disabled) return;
     const files = Array.from(list || []);
     const good = files.filter((f) => TYPES.includes(f.type) && f.size <= MAX_MB * 1024 * 1024);
     if (good.length !== files.length) onError?.(`Use JPG, PNG or WebP pictures up to ${MAX_MB} MB.`);
@@ -20,10 +21,10 @@ export default function DropZone({ onFiles, multiple = false, title = "Drag & dr
 
   return (
     <div
-      className={`ad-drop${over ? " over" : ""}${compact ? " compact" : ""}`}
+      className={`ad-drop${over && !disabled ? " over" : ""}${compact ? " compact" : ""}${disabled ? " disabled" : ""}`}
       onDragOver={(e) => {
         e.preventDefault();
-        setOver(true);
+        if (!disabled) setOver(true);
       }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => {
@@ -31,14 +32,15 @@ export default function DropZone({ onFiles, multiple = false, title = "Drag & dr
         setOver(false);
         take(e.dataTransfer.files);
       }}
+      aria-disabled={disabled}
     >
-      <input ref={input} type="file" accept={TYPES.join(",")} multiple={multiple} hidden onChange={(e) => take(e.target.files)} />
+      <input ref={input} type="file" accept={TYPES.join(",")} multiple={multiple} disabled={disabled} hidden onChange={(e) => take(e.target.files)} />
       <span className="ad-drop-icon">
         <Icon name="image-plus" size={compact ? 18 : 22} />
       </span>
       <p>
         {title}{" "}
-        <button type="button" className="ad-link" onClick={() => input.current?.click()}>
+        <button type="button" className="ad-link" onClick={() => input.current?.click()} disabled={disabled}>
           browse files
         </button>
       </p>

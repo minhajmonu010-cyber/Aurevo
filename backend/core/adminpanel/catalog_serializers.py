@@ -211,8 +211,10 @@ class AdminImageSerializer(serializers.ModelSerializer):
         return check_image(value)
 
     def update(self, instance, validated_data):
-        validated_data.pop("image", None)  # a picture is replaced by uploading a new one and deleting the old
-        return super().update(instance, validated_data)
+        old_image = instance.image.name
+        instance = super().update(instance, validated_data)
+        _delete_old_file(old_image, instance.image)
+        return instance
 
 
 def make_variant_sku(product, size, color, taken):

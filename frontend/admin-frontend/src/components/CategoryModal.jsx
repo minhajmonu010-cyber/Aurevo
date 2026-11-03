@@ -5,6 +5,7 @@ import { slugify } from "../utils/format";
 import { useObjectUrl } from "../utils/hooks";
 import { parseApiError } from "../utils/errors";
 import DropZone, { MAX_MB } from "./DropZone";
+import ImageCropDialog from "./ImageCropDialog";
 import Icon from "./Icon";
 import { Modal, Toggle } from "./ui";
 
@@ -14,6 +15,7 @@ export default function CategoryModal({ onClose, onCreated }) {
   const [form, setForm] = useState({ name: "", slug: "", description: "", is_active: true, priority: "" });
   const [slugTouched, setSlugTouched] = useState(false);
   const [file, setFile] = useState(null);
+  const [cropFile, setCropFile] = useState(null);
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const preview = useObjectUrl(file);
@@ -95,12 +97,13 @@ export default function CategoryModal({ onClose, onCreated }) {
                 <img src={preview} alt="Chosen category banner" />
                 <div className="ad-shot" style={{ position: "absolute", inset: "auto 10px 10px auto", width: "auto", aspectRatio: "auto", border: 0, background: "none" }}>
                   <div className="tools" style={{ position: "static" }}>
+                    <button type="button" onClick={() => setCropFile(file)} aria-label="Crop picture"><Icon name="crop" size={14} /></button>
                     <button type="button" onClick={() => setFile(null)} aria-label="Remove picture"><Icon name="trash" size={14} /></button>
                   </div>
                 </div>
               </div>
             ) : (
-              <DropZone onFiles={([f]) => { setFile(f); setErrors((e) => ({ ...e, image: "" })); }} onError={(message) => setErrors((e) => ({ ...e, image: message }))} hint={`JPG, PNG, WEBP (max ${MAX_MB} MB)`} />
+              <DropZone onFiles={([f]) => setCropFile(f)} onError={(message) => setErrors((e) => ({ ...e, image: message }))} hint={`JPG, PNG, WEBP (max ${MAX_MB} MB)`} />
             )}
             {errors.image && <p className="ad-field-error">{errors.image}</p>}
           </div>
@@ -127,6 +130,17 @@ export default function CategoryModal({ onClose, onCreated }) {
           </div>
         </div>
       </form>
+      {cropFile && (
+        <ImageCropDialog
+          file={cropFile}
+          onCancel={() => setCropFile(null)}
+          onComplete={(croppedFile) => {
+            setFile(croppedFile);
+            setCropFile(null);
+            setErrors((current) => ({ ...current, image: "" }));
+          }}
+        />
+      )}
     </Modal>
   );
 }

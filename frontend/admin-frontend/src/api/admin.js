@@ -36,7 +36,10 @@ export const uploadImage = (productId, file, isPrimary = false) => {
   if (isPrimary) form.append("is_primary", "true");
   return data(api.post(`/admin/catalog/products/${productId}/images/`, form));
 };
-export const updateImage = (id, body) => data(api.patch(`/admin/catalog/images/${id}/`, body));
+export const updateImage = (id, body) => {
+  const payload = body.image instanceof File ? toFormData(body) : body;
+  return data(api.patch(`/admin/catalog/images/${id}/`, payload));
+};
 export const deleteImage = (id) => api.delete(`/admin/catalog/images/${id}/`);
 
 // Turns a plain object into FormData (true/false as text, null as an empty value, files as they are).

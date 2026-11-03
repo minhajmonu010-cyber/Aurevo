@@ -3,12 +3,14 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { getCategory, listCategories, listProducts, toFormData, updateCategory } from "../api/admin";
 import DeleteCategoryDialog from "../components/DeleteCategoryDialog";
 import DropZone from "../components/DropZone";
+import ImageCropDialog from "../components/ImageCropDialog";
 import Icon from "../components/Icon";
 import { EmptyState, ErrorNote, Pill, Skeleton, Thumb, Toggle } from "../components/ui";
 import { useToast } from "../context/ToastContext";
 import { formatDate, formatPrice, slugify, timeAgo } from "../utils/format";
 import { useLoad, useObjectUrl } from "../utils/hooks";
 import { parseApiError } from "../utils/errors";
+import { fetchImageFile } from "../utils/imageFiles";
 
 const FIELDS = ["name", "slug", "description", "parent", "priority", "is_active", "is_featured", "in_search_suggest"];
 const fromCategory = (c) => ({
@@ -28,6 +30,7 @@ export default function CategoryEdit() {
 
   const [form, setForm] = useState(null);
   const [file, setFile] = useState(null);
+  const [cropFile, setCropFile] = useState(null);
   const [removeImage, setRemoveImage] = useState(false);
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
@@ -71,6 +74,13 @@ export default function CategoryEdit() {
 
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
   const shownImage = removeImage ? null : preview || category.image;
+  const cropCategoryImage = async () => {
+    try {
+      setCropFile(file || await fetchImageFile(category.image));
+    } catch (error) {
+      toast.show(error.message || "Could not open this image for cropping.", "bad");
+    }
+  };
   const parents = (others.data?.results || []).filter((c) => c.id !== category.id);
   const products = items.data?.results || [];
 
@@ -169,13 +179,20 @@ export default function CategoryEdit() {
             {shownImage ? (
               <div className="ad-cover">
                 <img src={shownImage} alt="Category cover" />
+                {(file || category.image) && !removeImage && (
+                  <div className="ad-shot" style={{ position: "absolute", inset: "auto 10px 10px auto", width: "auto", aspectRatio: "auto", border: 0, background: "none" }}>
+                    <div className="tools" style={{ position: "static" }}>
+                      <button type="button" onClick={cropCategoryImage} aria-label="Crop picture"><Icon name="crop" size={14} /></button>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <p className="ad-hint" style={{ marginBottom: 12 }}>No cover picture yet.</p>
             )}
             <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 14 }}>
               <div style={{ flex: "1 1 280px" }}>
-                <DropZone compact title="Drop a new cover, or" onFiles={([f]) => { setFile(f); setRemoveImage(false); setErrors((x) => ({ ...x, image: "" })); }} onError={(m) => setErrors((x) => ({ ...x, image: m }))} />
+                <DropZone compact title="Drop a new cover, or" onFiles={([f]) => setCropFile(f)} onError={(m) => setErrors((x) => ({ ...x, image: m }))} />
               </div>
               {(category.image || file) && !removeImage && (
                 <button type="button" className="ad-btn outline-danger" onClick={() => { setFile(null); setRemoveImage(true); }}><Icon name="trash" size={15} /> Remove</button>
@@ -270,6 +287,18 @@ export default function CategoryEdit() {
       </div>
 
       {deleting && <DeleteCategoryDialog category={category} onClose={() => setDeleting(false)} onDeleted={() => navigate("/categories", { replace: true })} />}
+      {cropFile && (
+        <ImageCropDialog
+          file={cropFile}
+          onCancel={() => setCropFile(null)}
+          onComplete={(croppedFile) => {
+            setFile(croppedFile);
+            setCropFile(null);
+            setRemoveImage(false);
+            setErrors((current) => ({ ...current, image: "" }));
+          }}
+        />
+      )}
     </form>
   );
 }

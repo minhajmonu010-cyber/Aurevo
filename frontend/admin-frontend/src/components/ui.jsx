@@ -71,6 +71,9 @@ export function Modal({ title, eyebrow, onClose, children, footer, width = 560, 
 
   useEffect(() => {
     const onKey = (e) => {
+      const dialogs = document.querySelectorAll('.ad-modal[role="dialog"][aria-modal="true"]');
+      if (dialogs[dialogs.length - 1] !== box.current) return;
+
       if (e.key === "Escape") {
         if (!locked) onClose();
         return;
