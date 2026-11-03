@@ -1,0 +1,335 @@
+.about-page {
+  min-height: 100vh;
+  padding: 0 6%;
+  background: var(--bg);
+  color: #fff;
+}
+
+.about-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 56px;
+  align-items: center;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 64px 0 58px;
+  border-bottom: 1px solid var(--line);
+}
+
+.about-eyebrow {
+  margin: 0 0 20px;
+  color: var(--teal);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+}
+
+.about-hero h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 50px;
+  line-height: 1.12;
+  font-weight: 500;
+}
+
+.about-hero h1 em {
+  color: var(--teal);
+  font-weight: 500;
+}
+
+.about-hero-visual {
+  position: relative;
+  min-height: 350px;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid rgba(52, 211, 194, 0.24);
+  background: #050505;
+}
+
+.about-hero-visual::after {
+  position: absolute;
+  inset: 35% 0 0;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.72));
+  content: "";
+  pointer-events: none;
+}
+
+.about-hero-visual img {
+  width: 100%;
+  height: 100%;
+  min-height: 350px;
+  object-fit: cover;
+  transition: transform 700ms cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+.about-hero-visual:hover img {
+  transform: scale(1.035);
+}
+
+.about-hero-visual figcaption {
+  position: absolute;
+  right: 20px;
+  bottom: 18px;
+  left: 20px;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.8px;
+}
+
+.about-hero-visual figcaption span {
+  color: #c5d1ce;
+  font-weight: 500;
+}
+
+.about-intro {
+  max-width: 500px;
+  margin: 22px 0 0;
+  color: #a6aaa7;
+  font-size: 14px;
+  line-height: 1.85;
+}
+
+.about-instagram {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 10px;
+  margin-top: 24px;
+  padding: 0 14px;
+  border: 1px solid rgba(52, 211, 194, 0.45);
+  border-radius: 3px;
+  color: #e8edf7;
+  font-size: 12px;
+  font-weight: 600;
+  transition: color 180ms ease, background 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+
+.about-instagram:hover {
+  transform: translateY(-2px);
+  border-color: var(--teal);
+  background: var(--teal);
+  color: #080d1a;
+  text-decoration: none;
+}
+
+.about-instagram span {
+  color: var(--teal);
+  font-size: 15px;
+  transition: color 180ms ease, transform 180ms ease;
+}
+
+.about-instagram:hover span {
+  transform: translate(2px, -2px);
+  color: #080d1a;
+}
+
+.about-instagram:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 3px;
+}
+
+.about-story {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 60px;
+  align-items: center;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 76px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.about-story-text h2,
+.about-values h2 {
+  margin: 0 0 18px;
+  font-family: var(--font-display);
+  font-size: 36px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.about-story-text > p:not(.about-eyebrow) {
+  max-width: 580px;
+  color: #a6aaa7;
+  font-size: 14px;
+  line-height: 1.85;
+}
+
+.about-story-panel {
+  position: relative;
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(52, 211, 194, 0.2);
+  background:
+    radial-gradient(ellipse at center, rgba(52, 211, 194, 0.14), transparent 58%),
+    #080d1a;
+}
+
+.about-story-panel span {
+  color: var(--teal);
+  font-family: var(--font-display);
+  font-size: 112px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.about-story-panel p {
+  margin: 14px 0 0;
+  color: #d4dad7;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 2px;
+}
+
+.about-values {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 70px 0 90px;
+}
+
+.about-values h2 {
+  margin-bottom: 0;
+}
+
+.about-values-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 30px;
+}
+
+.about-value-card {
+  position: relative;
+  min-height: 190px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.025);
+  transition: border-color 220ms ease, transform 220ms ease, background 220ms ease;
+}
+
+.about-value-card:hover {
+  border-color: rgba(52, 211, 194, 0.5);
+  background: rgba(52, 211, 194, 0.045);
+  transform: translateY(-3px);
+}
+
+.about-value-card span {
+  color: var(--teal);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.about-value-card h3 {
+  margin: 24px 0 8px;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.about-value-card p {
+  margin: 0;
+  color: #a6aaa7;
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+@media (max-width: 960px) {
+  .about-hero {
+    grid-template-columns: 1fr;
+    gap: 32px;
+    padding: 56px 0 44px;
+  }
+
+  .about-hero h1 {
+    font-size: 44px;
+  }
+
+  .about-hero-visual {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    aspect-ratio: 16 / 9;
+  }
+
+  .about-hero-visual img {
+    min-height: 0;
+  }
+
+  .about-story {
+    grid-template-columns: 1fr;
+    gap: 32px;
+    padding: 56px 0;
+  }
+
+  .about-story-panel {
+    min-height: 230px;
+  }
+
+  .about-values-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .about-page {
+    padding: 0 22px;
+  }
+
+  .about-hero h1 {
+    font-size: 35px;
+  }
+
+  .about-hero-visual {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    aspect-ratio: 4 / 3;
+  }
+
+  .about-hero-visual img {
+    min-height: 0;
+  }
+
+  .about-story-text h2,
+  .about-values h2 {
+    font-size: 30px;
+  }
+
+  .about-values {
+    padding: 54px 0 64px;
+  }
+
+  .about-value-card {
+    min-height: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .about-hero-visual img,
+  .about-value-card,
+  .about-instagram,
+  .about-instagram span {
+    transition: none;
+  }
+
+  .about-value-card:hover {
+    transform: none;
+  }
+
+  .about-instagram:hover,
+  .about-instagram:hover span {
+    transform: none;
+  }
+}

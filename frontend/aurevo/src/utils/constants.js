@@ -1,0 +1,1 @@
+export const COPYRIGHT_YEAR = new Date().getFullYear();
