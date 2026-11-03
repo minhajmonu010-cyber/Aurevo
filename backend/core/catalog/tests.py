@@ -75,6 +75,43 @@ class ShopApiTests(APITestCase):
         Product.objects.get(name="Deal").variants.update(stock=0)
         self.assertFalse(self.client.get(f"{SHOP}/products/").data["results"][0]["in_stock"])
 
+    def test_product_cards_include_average_approved_rating_and_review_count(self):
+        reviewed = self.product("Reviewed", prices=((1000, None, 5), (1200, None, 5)))
+        unrated = self.product("Unrated")
+        user_model = get_user_model()
+        for index, rating in enumerate((5, 4, 3)):
+            user = user_model.objects.create_user(
+                email=f"card-reviewer{index}@example.com",
+                password="test-password",
+            )
+            Review.objects.create(
+                user=user,
+                product=reviewed,
+                rating=rating,
+                is_approved=True,
+            )
+
+        pending_user = user_model.objects.create_user(
+            email="card-pending@example.com",
+            password="test-password",
+        )
+        Review.objects.create(
+            user=pending_user,
+            product=reviewed,
+            rating=1,
+        )
+
+        rows = {
+            row["name"]: row
+            for row in self.client.get(f"{SHOP}/products/").data["results"]
+        }
+        self.assertEqual(
+            (rows[reviewed.name]["average_rating"], rows[reviewed.name]["review_count"]),
+            (4.0, 3),
+        )
+        self.assertIsNone(rows[unrated.name]["average_rating"])
+        self.assertEqual(rows[unrated.name]["review_count"], 0)
+
     def test_the_main_picture_is_a_full_address(self):
         product = self.product("Pic")
         ProductImage.objects.create(product=product, image=SimpleUploadedFile("a.png", PNG, "image/png"), is_primary=True)

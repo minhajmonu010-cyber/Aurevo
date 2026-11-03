@@ -10,6 +10,7 @@ import {
 } from "../api/catalog";
 import Icon from "../Components/Icon";
 import ImageSlot from "../Components/ImageSlot";
+import ProductRating from "../Components/ProductRating";
 import SiteFooter from "../Components/SiteFooter";
 import SiteHeader from "../Components/SiteHeader";
 import { useToast } from "../context/ToastContext";
@@ -472,6 +473,10 @@ export default function Home({ catalogOnly = false }) {
                     <h3>
                       {product.name}
                     </h3> 
+                    <ProductRating
+                      averageRating={product.average_rating}
+                      reviewCount={product.review_count}
+                    />
                     <p className="price">
                       <strong>{formatPrice(product.price)}</strong>
                       {product.original_price && <s>{formatPrice(product.original_price)}</s>}

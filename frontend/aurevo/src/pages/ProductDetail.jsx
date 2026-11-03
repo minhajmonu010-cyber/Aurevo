@@ -12,6 +12,7 @@ import {
 } from "../api/catalog";
 import Icon from "../Components/Icon";
 import ImageSlot from "../Components/ImageSlot";
+import ProductRating from "../Components/ProductRating";
 import SiteFooter from "../Components/SiteFooter";
 import SiteHeader from "../Components/SiteHeader";
 import { useAuth } from "../context/authState";
@@ -1064,6 +1065,10 @@ export default function ProductDetail() {
                 <div className="product-info">
                   <span className="product-cat">{item.category.name}</span>
                   <h3>{item.name}</h3>
+                  <ProductRating
+                    averageRating={item.average_rating}
+                    reviewCount={item.review_count}
+                  />
                   <p className="price">
                     <strong>{formatPrice(item.price)}</strong>
                     {item.original_price && (

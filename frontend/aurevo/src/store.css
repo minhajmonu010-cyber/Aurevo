@@ -919,6 +919,24 @@
   margin: 4px 0 8px;
   font-size: 16px;
 }
+.product-rating {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 0 8px;
+  color: var(--ink);
+  font-size: 12px;
+}
+.product-rating-star {
+  color: #f5b942;
+}
+.product-rating-count,
+.product-rating-empty {
+  color: var(--muted);
+}
+.product-rating-empty {
+  display: block;
+}
 .price {
   display: flex;
   align-items: baseline;

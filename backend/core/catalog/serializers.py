@@ -83,12 +83,15 @@ class ProductListSerializer(serializers.ModelSerializer):
     original_price = serializers.SerializerMethodField()
     discount_percent = serializers.SerializerMethodField()
     in_stock = serializers.SerializerMethodField()
+    average_rating = serializers.FloatField(read_only=True, allow_null=True)
+    review_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Product
         fields = (
             "id", "name", "slug", "category", "brand", "image",
             "price", "original_price", "discount_percent", "in_stock", "is_featured",
+            "average_rating", "review_count",
         )
 
     def _cheapest(self, obj):

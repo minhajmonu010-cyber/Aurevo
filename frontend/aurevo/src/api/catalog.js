@@ -47,7 +47,7 @@ export const getOffers = () =>
   cachedPublicRequest("offers", () => api.get("/catalog/offers/"));
 
 // params: category (slug), search, featured ("true"), ordering (featured | newest | price_asc | price_desc), page, page_size
-// -> { count, next, previous, results: [{ id, name, slug, category, brand, image, price, original_price, discount_percent, in_stock, is_featured }] }
+// -> { count, next, previous, results: [{ id, name, slug, category, brand, image, price, original_price, discount_percent, in_stock, is_featured, average_rating, review_count }] }
 export const getProducts = (params = {}) => {
   const key = queryKey(params);
   return cachedPublicRequest(`products:${key}`, () =>

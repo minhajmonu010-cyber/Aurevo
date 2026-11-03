@@ -22,7 +22,11 @@ def visible_products():
     active_variants = ProductVariant.objects.filter(is_active=True).order_by("price", "id")
     return (
         Product.objects.filter(is_active=True, category__is_active=True)  # a blocked or archived category hides its products
-        .annotate(min_price=Min("variants__price", filter=Q(variants__is_active=True)))
+        .annotate(
+            min_price=Min("variants__price", filter=Q(variants__is_active=True)),
+            average_rating=Avg("reviews__rating", filter=Q(reviews__is_approved=True)),
+            review_count=Count("reviews", filter=Q(reviews__is_approved=True), distinct=True),
+        )
         .filter(min_price__isnull=False)
         .select_related("category", "brand")
         .prefetch_related(Prefetch("variants", queryset=active_variants, to_attr="active_variants"), "images")
