@@ -261,46 +261,6 @@
   min-width: 0;
 }
 
-.pd-title-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.pd-title-row > div {
-  min-width: 0;
-}
-
-.pd-share {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  margin-top: 18px;
-  padding: 9px 11px;
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.025);
-  color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
-}
-
-.pd-share:hover:not(:disabled) {
-  border-color: var(--teal);
-  background: rgba(52, 211, 194, 0.08);
-  color: var(--teal);
-}
-
-.pd-share:disabled {
-  cursor: wait;
-  opacity: 0.7;
-}
-
-.pd-share:focus-visible,
 .pd-quantity-control button:focus-visible,
 .pd-retry:focus-visible {
   outline: 2px solid var(--teal);
@@ -1618,25 +1578,6 @@
     font-size: 34px;
   }
 
-  .pd-title-row {
-    gap: 8px;
-  }
-
-  .pd-share {
-    gap: 0;
-    margin-top: 15px;
-    padding: 9px;
-  }
-
-  .pd-share span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-  }
-
   .pd-prices strong {
     font-size: 25px;
   }
@@ -1744,7 +1685,6 @@
   .pd-lightbox-close,
   .pd-thumbnail,
   .pd-choice,
-  .pd-share,
   .pd-add-cart,
   .pd-buy-now,
   .pd-wishlist {

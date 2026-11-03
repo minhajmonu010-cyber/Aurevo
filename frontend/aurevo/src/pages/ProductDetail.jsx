@@ -61,7 +61,6 @@ export default function ProductDetail() {
   const [notice, setNotice] = useState("");
   const [addingToCart, setAddingToCart] = useState(false);
   const [addingToWishlist, setAddingToWishlist] = useState(false);
-  const [sharing, setSharing] = useState(false);
   const [wishlistState, setWishlistState] = useState({
     ownerId: null,
     productId: null,
@@ -514,25 +513,6 @@ export default function ProductDetail() {
     });
   }
 
-  async function handleShare() {
-    const url = window.location.href;
-    try {
-      setSharing(true);
-      if (navigator.share) {
-        await navigator.share({ title: product.name, url });
-        return;
-      }
-      await navigator.clipboard.writeText(url);
-      toast("Product link copied.");
-    } catch (error) {
-      if (error.name !== "AbortError") {
-        toast("Could not share this product.");
-      }
-    } finally {
-      setSharing(false);
-    }
-  }
-
   async function handleLoadMoreReviews() {
     if (loadingMoreReviews) return;
     setLoadingMoreReviews(true);
@@ -667,23 +647,11 @@ export default function ProductDetail() {
         </div>
 
         <div className="pd-details">
-          <div className="pd-title-row">
-            <div>
-              <p className="pd-category">
-                {product.category?.name || "AUREVO COLLECTION"}
-              </p>
-              <h1>{product.name}</h1>
-            </div>
-            <button
-              type="button"
-              className="pd-share"
-              onClick={handleShare}
-              disabled={sharing}
-              aria-label="Share product"
-            >
-              <Icon name="share" size={17} />
-              <span>{sharing ? "Sharing..." : "Share"}</span>
-            </button>
+          <div>
+            <p className="pd-category">
+              {product.category?.name || "AUREVO COLLECTION"}
+            </p>
+            <h1>{product.name}</h1>
           </div>
 
           {product.brand && (
