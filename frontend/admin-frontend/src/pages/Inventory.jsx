@@ -4,7 +4,7 @@ import Icon from "../components/Icon";
 import { Modal, Pagination, Pill, StatCard, Thumb } from "../components/ui";
 import { mediaUrl } from "../utils/format";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 7;
 
 export default function Inventory() {
   const [inventory, setInventory] = useState([]);
