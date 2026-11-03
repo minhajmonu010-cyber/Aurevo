@@ -13,7 +13,7 @@ import { mediaUrl } from "../utils/media";
 // ready: false = the page is not built yet, so the link only shows a message
 const LINKS = [
   { to: "/", label: "Home", ready: true },
-  { to: "/categories", label: "Shop", ready: true },
+  { to: "/categories", label: "Collections", ready: true },
   { to: "/about", label: "About", ready: true },
   { to: "/contact", label: "Contact", ready: true },
 ];
