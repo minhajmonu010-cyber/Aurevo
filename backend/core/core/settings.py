@@ -28,7 +28,7 @@ ADMIN_FIRST_NAME=os.getenv("ADMIN_FIRST_NAME","Admin")
 SECRET_KEY = 'django-insecure-1fg$89$%#6nbc*d(#*t%+y)%xj!vkaki%%j+^3wnw55qqr6)i+'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False if os.getenv("DEBUG", "False").strip().lower() in {"0", "false", "no", "off"} else True
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
