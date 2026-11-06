@@ -1,0 +1,22 @@
+version: 1
+
+applications:
+  - appRoot: .
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - npm ci --prefix frontend/aurevo --cache .npm --prefer-offline
+            - npm ci --prefix frontend/admin-frontend --cache .npm --prefer-offline
+        build:
+          commands:
+            - npm run build
+      artifacts:
+        baseDirectory: frontend/aurevo/dist
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - .npm/**/*
+          - frontend/aurevo/node_modules/**/*
+          - frontend/admin-frontend/node_modules/**/*
