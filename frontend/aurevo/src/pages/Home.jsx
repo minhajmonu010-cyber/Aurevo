@@ -207,6 +207,7 @@ export default function Home({ catalogOnly = false }) {
   };
 
   const [category, setCategory] = useState(null); // a category slug, or null for everything
+  const [collectionPage, setCollectionPage] = useState(1);
   const [searchParams, setSearchParams] = useSearchParams();
   const search = searchParams.get("search") || "";
   const [ordering, setOrdering] = useState("featured");
@@ -224,8 +225,8 @@ export default function Home({ catalogOnly = false }) {
     category,
     search,
     ordering,
-    pageSize: catalogOnly ? 48 : 8,
-    autoLoad: catalogOnly,
+    pageSize: catalogOnly ? 12 : 8,
+    pageNumber: catalogOnly ? collectionPage : undefined,
   });
 
   // featured categories first, the rest keep the order set in the admin
@@ -240,8 +241,24 @@ export default function Home({ catalogOnly = false }) {
   const categoryName = sorted.find((c) => c.slug === category)?.name;
 
   const goToProducts = () => requestAnimationFrame(() => productsSection.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  const shopOffer = (offer) => {
+    const targetSlug = offer.target_slugs?.[0];
+
+    if (offer.applies_to === "products" && targetSlug) {
+      navigate(`/products/${targetSlug}`);
+      return;
+    }
+
+    if (offer.applies_to === "categories" && targetSlug) {
+      pickCategory(targetSlug);
+      return;
+    }
+
+    goToProducts();
+  };
   const pickCategory = (slug) => {
     setCategory(slug);
+    setCollectionPage(1);
     setSearchParams({});
     goToProducts();
   };
@@ -251,10 +268,16 @@ export default function Home({ catalogOnly = false }) {
       setCategory(null);
       goToProducts();
     }
+    setCollectionPage(1);
   };
   const clearFilters = () => {
     setCategory(null);
+    setCollectionPage(1);
     setSearchParams({});
+  };
+  const changeCollectionPage = (nextPage) => {
+    setCollectionPage(nextPage);
+    requestAnimationFrame(() => productsSection.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
   const filtering = Boolean(category || search);
 
@@ -266,11 +289,32 @@ export default function Home({ catalogOnly = false }) {
         {/* big banner */}
         {!catalogOnly && (
           <section className="hero" aria-labelledby="hero-title">
-            <ImageSlot src={HERO.image} tint={HERO.tint} className="hero-bg" />
+            <ImageSlot
+              src={HERO.image}
+              tint={HERO.tint}
+              className="hero-bg"
+              loading="eager"
+              fetchPriority="high"
+            />
             <div className="hero-shade" />
             <div className="hero-content">
               <p className="eyebrow">{}</p>
-              <h1 id="hero-title">{HERO.title}</h1>
+              <h1 id="hero-title" aria-label={HERO.title}>
+                {Array.from(HERO.title, (letter, index) =>
+                  letter === " " ? (
+                    " "
+                  ) : (
+                    <span
+                      key={`${letter}-${index}`}
+                      className="hero-title-letter"
+                      aria-hidden="true"
+                      style={{ animationDelay: `${index * 35}ms` }}
+                    >
+                      {letter}
+                    </span>
+                  ),
+                )}
+              </h1>
             </div>
           </section>
         )}
@@ -304,7 +348,7 @@ export default function Home({ catalogOnly = false }) {
                       {offer.description && <small>{scope}</small>}
                       <small>Ends {new Date(offer.end_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</small>
                     </div>
-                    <button type="button" className="home-offer-link" onClick={goToProducts}>
+                    <button type="button" className="home-offer-link" onClick={() => shopOffer(offer)}>
                       Shop <Icon name="arrow-right" size={15} />
                     </button>
                   </article>
@@ -382,7 +426,10 @@ export default function Home({ catalogOnly = false }) {
                   <span>Sort by</span>
                   <select
                     value={ordering}
-                    onChange={(event) => setOrdering(event.target.value)}
+                    onChange={(event) => {
+                      setOrdering(event.target.value);
+                      setCollectionPage(1);
+                    }}
                     aria-label="Sort products"
                   >
                     <option value="featured">Featured</option>
@@ -497,8 +544,28 @@ export default function Home({ catalogOnly = false }) {
             )}
           </div>
 
-          {catalogOnly && products.loadingMore && (
-            <p className="load-more-status" role="status">Loading remaining products…</p>
+          {catalogOnly && products.pageCount > 1 && (
+            <nav className="collection-pagination" aria-label="Product pages">
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => changeCollectionPage(collectionPage - 1)}
+                disabled={products.loading || collectionPage <= 1}
+              >
+                Previous
+              </button>
+              <span aria-live="polite">
+                Page {collectionPage} of {products.pageCount}
+              </span>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => changeCollectionPage(collectionPage + 1)}
+                disabled={products.loading || collectionPage >= products.pageCount}
+              >
+                Next
+              </button>
+            </nav>
           )}
           {!catalogOnly && products.hasMore && (
             <div className="load-more">

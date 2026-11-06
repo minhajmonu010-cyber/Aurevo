@@ -31,6 +31,21 @@ export default function EditProfile() {
   // an error disappears as soon as the person starts fixing that box
   const clearError = (key) => setErrors((prev) => ({ ...prev, [key]: undefined }));
 
+  const updateName = (event) => {
+    const value = event.target.value;
+    setName(value);
+    if (value.trim().length >= 2) clearError("full_name");
+    setFormError("");
+  };
+
+  const updatePhone = (event) => {
+    const value = event.target.value;
+    const cleaned = value.replace(/[\s\-()]/g, "");
+    setPhone(value);
+    if (!cleaned || PHONE_PATTERN.test(cleaned)) clearError("phone");
+    setFormError("");
+  };
+
   const choosePicture = (e) => {
     const picked = e.target.files?.[0];
     e.target.value = ""; // lets the same file be picked again later
@@ -47,6 +62,8 @@ export default function EditProfile() {
     setFile(null);
     setPreview(null);
     setRemovePicture(true);
+    clearError("profile_image");
+    setFormError("");
   };
 
   const handleSubmit = async (e) => {
@@ -129,8 +146,8 @@ export default function EditProfile() {
         </div>
 
         <div className="edit-grid">
-          <Field label="Full Name" name="full_name" icon="user" value={name} onChange={(e) => { setName(e.target.value); clearError("full_name"); }} error={errors.full_name} autoComplete="name" />
-          <Field label="Phone" name="phone" type="tel" icon="phone" value={phone} onChange={(e) => { setPhone(e.target.value); clearError("phone"); }} error={errors.phone} placeholder="Enter phone number" autoComplete="tel" />
+          <Field label="Full Name" name="full_name" icon="user" value={name} onChange={updateName} error={errors.full_name} autoComplete="name" />
+          <Field label="Phone" name="phone" type="tel" icon="phone" value={phone} onChange={updatePhone} error={errors.phone} placeholder="Enter phone number" autoComplete="tel" />
           <div className="col-wide">
             <Field label="Email Address" name="email" type="email" icon="mail" value={user.email} onChange={() => {}} disabled hint="Your email is your login, so it can't be changed here." />
           </div>

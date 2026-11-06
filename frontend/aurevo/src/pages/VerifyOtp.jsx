@@ -95,7 +95,15 @@ export default function VerifyOtp() {
       <form onSubmit={handleSubmit}>
         {info && <div className="alert success" role="status">{info}</div>}
         {formError && <div className="alert error" role="alert">{formError}</div>}
-        <OtpInput value={code} onChange={setCode} disabled={submitting} hasError={Boolean(formError)} />
+        <OtpInput
+          value={code}
+          onChange={(value) => {
+            setCode(value);
+            if (value.length === 6) setFormError("");
+          }}
+          disabled={submitting}
+          hasError={Boolean(formError)}
+        />
         <button className="btn primary" type="submit" disabled={submitting || code.length !== 6}>
           {submitting ? "Verifying..." : <>Verify &amp; Proceed <Icon name="arrow-right" size={16} /></>}
         </button>

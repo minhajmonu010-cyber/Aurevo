@@ -56,16 +56,20 @@ export default function Wishlist() {
   async function addToCart(item) {
     setAddingItemId(item.id);
     try {
-      const product = await getProduct(item.slug);
-      const variant = product.variants.find(
-        (option) => option.in_stock && option.stock > 0
-      );
-      if (!variant) {
-        toast("This product is out of stock.");
-        return;
+      let variantId = item.variant_id;
+      if (variantId == null) {
+        const product = await getProduct(item.slug);
+        const variant = product.variants.find(
+          (option) => option.in_stock && option.stock > 0
+        );
+        if (!variant) {
+          toast("This product is out of stock.");
+          return;
+        }
+        variantId = variant.id;
       }
 
-      await addCartItem(variant.id, 1);
+      await addCartItem(variantId, 1);
       toast(`${item.name} added to your cart.`);
     } catch (err) {
       toast(
@@ -103,6 +107,9 @@ export default function Wishlist() {
                     <h2>{item.name}</h2>
                     <div className="shop-item-meta">
                       <span>{item.price ? formatPrice(item.price) : "Unavailable"}</span>
+                      {(item.color || item.size) && (
+                        <span>{[item.color, item.size].filter(Boolean).join(" · ")}</span>
+                      )}
                       <span>{item.in_stock ? "In stock" : "Currently unavailable"}</span>
                     </div>
                   </div>

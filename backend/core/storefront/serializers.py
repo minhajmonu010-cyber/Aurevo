@@ -14,3 +14,4 @@ class CartQuantitySerializer(serializers.Serializer):
 
 class WishlistItemWriteSerializer(serializers.Serializer):
     product_id = StrictIntegerField(min_value=1)
+    variant_id = StrictIntegerField(min_value=1, required=False)

@@ -10,6 +10,7 @@ export default function Inventory() {
   const [inventory, setInventory] = useState([]);
   const [summary, setSummary] = useState({});
   const [count, setCount] = useState(0);
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const [page, setPage] = useState(1);
@@ -22,6 +23,11 @@ export default function Inventory() {
   const [stockNote, setStockNote] = useState("");
   const [stockSaving, setStockSaving] = useState(false);
   const [stockError, setStockError] = useState("");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearch(searchInput.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
 
   useEffect(() => {
     let active = true;
@@ -112,8 +118,8 @@ export default function Inventory() {
           <input
             type="search"
             placeholder="Search product or SKU..."
-            value={search}
-            onChange={(event) => { setSearch(event.target.value); setPage(1); }}
+            value={searchInput}
+            onChange={(event) => { setSearchInput(event.target.value); setPage(1); }}
             aria-label="Search product or SKU"
           />
         </div>

@@ -72,7 +72,23 @@ export default function CategoryEdit() {
     return <EmptyState icon="archive" title={category.name} action={<Link className="ad-btn primary" to="/categories">Back to categories</Link>}>This is the built-in archive for products whose category was deleted. It cannot be edited. Give those products a new category from their own page.</EmptyState>;
   }
 
-  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+  const set = (key, value) => {
+    setForm((current) => ({ ...current, [key]: value }));
+    setErrors((current) => {
+      const valid = key === "name"
+        ? value.trim().length >= 2 && value.length <= 100
+        : key === "slug"
+          ? /^[a-z0-9]+(-[a-z0-9]+)*$/.test(value)
+          : key === "priority"
+            ? /^\d+$/.test(String(value)) && Number(value) <= 9998
+            : true;
+      if (!valid || !current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      delete next.form;
+      return next;
+    });
+  };
   const shownImage = removeImage ? null : preview || category.image;
   const cropCategoryImage = async () => {
     try {
@@ -192,7 +208,16 @@ export default function CategoryEdit() {
             )}
             <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 14 }}>
               <div style={{ flex: "1 1 280px" }}>
-                <DropZone compact title="Drop a new cover, or" onFiles={([f]) => setCropFile(f)} onError={(m) => setErrors((x) => ({ ...x, image: m }))} />
+                <DropZone compact title="Drop a new cover, or" onFiles={([f]) => setCropFile(f)} onError={(message) => {
+                  if (message) setErrors((current) => ({ ...current, image: message }));
+                  else setErrors((current) => {
+                    if (!current.image) return current;
+                    const next = { ...current };
+                    delete next.image;
+                    delete next.form;
+                    return next;
+                  });
+                }} />
               </div>
               {(category.image || file) && !removeImage && (
                 <button type="button" className="ad-btn outline-danger" onClick={() => { setFile(null); setRemoveImage(true); }}><Icon name="trash" size={15} /> Remove</button>
@@ -295,7 +320,12 @@ export default function CategoryEdit() {
             setFile(croppedFile);
             setCropFile(null);
             setRemoveImage(false);
-            setErrors((current) => ({ ...current, image: "" }));
+            setErrors((current) => {
+              const next = { ...current };
+              delete next.image;
+              delete next.form;
+              return next;
+            });
           }}
         />
       )}

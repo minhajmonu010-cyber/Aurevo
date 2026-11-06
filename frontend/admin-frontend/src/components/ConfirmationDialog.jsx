@@ -7,6 +7,10 @@ export default function ConfirmationDialog({
   message,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
+  busyLabel = "Working...",
+  icon = "trash",
+  tone = "danger",
+  confirmClassName = "ad-btn danger",
   busy = false,
   error,
   onConfirm,
@@ -17,7 +21,7 @@ export default function ConfirmationDialog({
   return (
     <Modal
       title={title}
-      tone="danger"
+      tone={tone}
       width={460}
       onClose={onClose}
       locked={busy}
@@ -35,11 +39,11 @@ export default function ConfirmationDialog({
           </button>
           <button
             type="button"
-            className="ad-btn danger"
+            className={confirmClassName}
             onClick={onConfirm}
             disabled={busy}
           >
-            <Icon name="trash" size={15} /> {busy ? "Deleting..." : confirmLabel}
+            <Icon name={icon} size={15} /> {busy ? busyLabel : confirmLabel}
           </button>
         </>
       }

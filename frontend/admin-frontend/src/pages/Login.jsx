@@ -12,14 +12,30 @@ export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const redirectTo = location.state?.from?.pathname || "/";
+  const requestedLocation = location.state?.from;
+  const redirectTo =
+    requestedLocation?.pathname?.startsWith("/") &&
+    !requestedLocation.pathname.startsWith("//")
+      ? `${requestedLocation.pathname}${requestedLocation.search || ""}${requestedLocation.hash || ""}`
+      : "/";
 
   const [form, setForm] = useState({ email: "", password: "" });
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const update = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
+  const update = (e) => {
+    const { name, value } = e.target;
+    setForm((current) => ({ ...current, [name]: value }));
+    setErrors((current) => {
+      const valid = name === "email" ? isEmail(value) : Boolean(value);
+      if (!current[name] || !valid) return current;
+      const next = { ...current };
+      delete next[name];
+      return next;
+    });
+    setFormError("");
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();

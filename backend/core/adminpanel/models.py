@@ -27,6 +27,14 @@ class Coupon(models.Model):
         validators=[MinValueValidator(0.01)],
     )
 
+    max_discount_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0.01)],
+    )
+
     minimum_order_amount = models.DecimalField(
         max_digits=10,
         decimal_places=2,

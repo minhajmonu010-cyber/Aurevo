@@ -12,9 +12,11 @@ export const cancelPayment = (data) => api.post("/orders/checkout/cancel/", data
 
 export const cancelOrder = (id) =>
   api.post(`/orders/${id}/cancel/`);
+export const cancelOrderItem = (orderId, itemId) =>
+  api.post(`/orders/${orderId}/items/${itemId}/cancel/`);
 
-export const returnOrder = (id, reason) =>
-  api.post(`/orders/${id}/return/`, { reason });
+export const returnOrderItem = (orderId, itemId, reason) =>
+  api.post(`/orders/${orderId}/items/${itemId}/return/`, { reason });
 
 export const submitOrderItemReview = (orderId, itemId, data) =>
   api.post(`/orders/${orderId}/items/${itemId}/review/`, data);

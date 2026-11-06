@@ -1,36 +1,42 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import { GoogleOAuthProvider } from "@react-oauth/google";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./Components/ProtectedRoute";
 import PublicOnlyRoute from "./Components/PublicOnlyRoute";
-import Signup from "./pages/Signup";
-import Login from "./pages/Login";
-import VerifyOtp from "./pages/VerifyOtp";
-import ForgotPassword from "./pages/ForgotPassword";
-import ResetPassword from "./pages/ResetPassword";
-import ChangePassword from "./pages/ChangePassword";
-import Home from "./pages/Home";
-import Profile from "./pages/Profile";
-import EditProfile from "./pages/EditProfile";
 import { ToastProvider } from "./context/ToastContext";
-import Categories from "./pages/Categories";
-import Cart from "./pages/Cart";
-import Wishlist from "./pages/Wishlist";
-import About from "./pages/About";
-import Contact from "./pages/Contact";
-import ProductDetail from "./pages/ProductDetail";
-import Address from "./pages/Address";
-import Orders from "./pages/Orders";
-import Checkout from "./pages/Checkout";
-import Wallet from "./pages/Wallet";
-import Terms from "./pages/Terms";
-import Privacy from "./pages/Privacy";
-import NotFound from "./pages/NotFound";
+
+const Signup = lazy(() => import("./pages/Signup"));
+const Login = lazy(() => import("./pages/Login"));
+const VerifyOtp = lazy(() => import("./pages/VerifyOtp"));
+const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
+const ResetPassword = lazy(() => import("./pages/ResetPassword"));
+const ChangePassword = lazy(() => import("./pages/ChangePassword"));
+const Home = lazy(() => import("./pages/Home"));
+const Profile = lazy(() => import("./pages/Profile"));
+const EditProfile = lazy(() => import("./pages/EditProfile"));
+const Categories = lazy(() => import("./pages/Categories"));
+const Cart = lazy(() => import("./pages/Cart"));
+const Wishlist = lazy(() => import("./pages/Wishlist"));
+const About = lazy(() => import("./pages/About"));
+const Contact = lazy(() => import("./pages/Contact"));
+const ProductDetail = lazy(() => import("./pages/ProductDetail"));
+const Address = lazy(() => import("./pages/Address"));
+const Orders = lazy(() => import("./pages/Orders"));
+const Checkout = lazy(() => import("./pages/Checkout"));
+const Wallet = lazy(() => import("./pages/Wallet"));
+const Terms = lazy(() => import("./pages/Terms"));
+const Privacy = lazy(() => import("./pages/Privacy"));
+const NotFound = lazy(() => import("./pages/NotFound"));
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 const guest = (page) => <PublicOnlyRoute>{page}</PublicOnlyRoute>;
+const page = (Component) => (
+  <Suspense fallback={<div className="route-loading" role="status">Loading page...</div>}>
+    <Component />
+  </Suspense>
+);
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -49,29 +55,29 @@ function Routing() {
       <AuthProvider>
       <ToastProvider>
         <Routes>
-          <Route path="/signup" element={guest(<Signup />)} />
-          <Route path="/login" element={guest(<Login />)} />
-          <Route path="/verify-otp" element={guest(<VerifyOtp />)} />
-          <Route path="/forgot-password" element={guest(<ForgotPassword />)} />
-          <Route path="/reset-password" element={guest(<ResetPassword />)} />
+          <Route path="/signup" element={guest(page(Signup))} />
+          <Route path="/login" element={guest(page(Login))} />
+          <Route path="/verify-otp" element={guest(page(VerifyOtp))} />
+          <Route path="/forgot-password" element={guest(page(ForgotPassword))} />
+          <Route path="/reset-password" element={guest(page(ResetPassword))} />
 
-          <Route path="/" element={<Home/>} />
-          <Route path="/categories" element={<Categories />} />
-          <Route path="/about" element={<About />} />
-          <Route path="/contact" element={<Contact />} />
-          <Route path="/terms" element={<Terms />} />
-          <Route path="/privacy" element={<Privacy />} />
-          <Route path="/products/:slug" element={<ProductDetail />} />
-          <Route path="/cart" element={<ProtectedRoute><Cart /></ProtectedRoute>} />
-          <Route path="/address"element={<ProtectedRoute><Address /></ProtectedRoute>}/>
-          <Route path="/orders"element={<ProtectedRoute><Orders /></ProtectedRoute>}/>
-          <Route path="/wallet"element={<ProtectedRoute><Wallet /></ProtectedRoute>}/>
-          <Route path="/checkout" element={<ProtectedRoute><Checkout /></ProtectedRoute>} />
-          <Route path="/wishlist" element={<ProtectedRoute><Wishlist /></ProtectedRoute>} />
-          <Route path="/profile" element={<ProtectedRoute><Profile/></ProtectedRoute>}/>
-          <Route path="/profile/edit" element={<ProtectedRoute><EditProfile /></ProtectedRoute>} />
-          <Route path="/change-password" element={<ProtectedRoute><ChangePassword /></ProtectedRoute>} />
-          <Route path="*" element={<NotFound />} />
+          <Route path="/" element={page(Home)} />
+          <Route path="/categories" element={page(Categories)} />
+          <Route path="/about" element={page(About)} />
+          <Route path="/contact" element={page(Contact)} />
+          <Route path="/terms" element={page(Terms)} />
+          <Route path="/privacy" element={page(Privacy)} />
+          <Route path="/products/:slug" element={page(ProductDetail)} />
+          <Route path="/cart" element={<ProtectedRoute>{page(Cart)}</ProtectedRoute>} />
+          <Route path="/address" element={<ProtectedRoute>{page(Address)}</ProtectedRoute>} />
+          <Route path="/orders" element={<ProtectedRoute>{page(Orders)}</ProtectedRoute>} />
+          <Route path="/wallet" element={<ProtectedRoute>{page(Wallet)}</ProtectedRoute>} />
+          <Route path="/checkout" element={<ProtectedRoute>{page(Checkout)}</ProtectedRoute>} />
+          <Route path="/wishlist" element={<ProtectedRoute>{page(Wishlist)}</ProtectedRoute>} />
+          <Route path="/profile" element={<ProtectedRoute>{page(Profile)}</ProtectedRoute>} />
+          <Route path="/profile/edit" element={<ProtectedRoute>{page(EditProfile)}</ProtectedRoute>} />
+          <Route path="/change-password" element={<ProtectedRoute>{page(ChangePassword)}</ProtectedRoute>} />
+          <Route path="*" element={page(NotFound)} />
 
         </Routes>
        </ToastProvider>

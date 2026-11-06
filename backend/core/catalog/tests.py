@@ -75,6 +75,27 @@ class ShopApiTests(APITestCase):
         Product.objects.get(name="Deal").variants.update(stock=0)
         self.assertFalse(self.client.get(f"{SHOP}/products/").data["results"][0]["in_stock"])
 
+    def test_product_detail_includes_its_active_offer_price(self):
+        product = self.product("Offer detail", prices=((1000, None, 5),))
+        now = timezone.now()
+        Offer.objects.create(
+            name="Detail deal",
+            discount_type=Offer.PERCENTAGE,
+            discount_value=Decimal("20.00"),
+            applies_to=Offer.PRODUCTS,
+            target_ids=[product.id],
+            start_date=now - timedelta(days=1),
+            end_date=now + timedelta(days=1),
+            is_active=True,
+        )
+
+        response = self.client.get(f"{SHOP}/products/{product.slug}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["variants"][0]["offer_price"], "800.00")
+        self.assertEqual(response.data["variants"][0]["offer_discount"], "200.00")
+        self.assertEqual(response.data["variants"][0]["offer_name"], "Detail deal")
+
     def test_product_cards_include_average_approved_rating_and_review_count(self):
         reviewed = self.product("Reviewed", prices=((1000, None, 5), (1200, None, 5)))
         unrated = self.product("Unrated")
@@ -318,7 +339,53 @@ class AdminToShopTests(APITestCase):
         response = self.client.get(f"{SHOP}/offers/")
         offers_by_name = {offer["name"]: offer for offer in response.data}
         self.assertEqual(offers_by_name["Product offer"]["target_names"], ["Targeted shirt"])
+        self.assertEqual(
+            offers_by_name["Product offer"]["target_slugs"],
+            [product.slug],
+        )
         self.assertEqual(offers_by_name["Category offer"]["target_names"], ["Targeted collection"])
+        self.assertEqual(
+            offers_by_name["Category offer"]["target_slugs"],
+            [category.slug],
+        )
+
+    def test_public_offer_targets_are_loaded_in_constant_queries(self):
+        products = [
+            Product.objects.create(name=f"Offer product {index}", category=self.category)
+            for index in range(2)
+        ]
+        categories = [
+            Category.objects.create(name=f"Offer category {index}")
+            for index in range(2)
+        ]
+        now = timezone.now()
+        common = {
+            "discount_type": Offer.PERCENTAGE,
+            "discount_value": Decimal("10.00"),
+            "start_date": now - timedelta(days=1),
+            "end_date": now + timedelta(days=1),
+            "is_active": True,
+        }
+        for index, product in enumerate(products):
+            Offer.objects.create(
+                **common,
+                name=f"Product offer {index}",
+                applies_to=Offer.PRODUCTS,
+                target_ids=[product.id],
+            )
+        for index, category in enumerate(categories):
+            Offer.objects.create(
+                **common,
+                name=f"Category offer {index}",
+                applies_to=Offer.CATEGORIES,
+                target_ids=[category.id],
+            )
+
+        with self.assertNumQueries(3):
+            response = self.client.get(f"{SHOP}/offers/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 4)
 
     def test_admin_offer_rejects_unknown_target_ids(self):
         now = timezone.now()

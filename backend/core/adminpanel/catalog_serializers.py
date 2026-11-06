@@ -287,25 +287,26 @@ class AdminProductListSerializer(serializers.ModelSerializer):
             return None
         return request.build_absolute_uri(images[0].image.url) if request else images[0].image.url
 
-    def _prices(self, obj):
-        return [variant.price for variant in obj.variants.all()]
-
     def get_min_price(self, obj):
-        prices = self._prices(obj)
-        return f"{min(prices):.2f}" if prices else None
+        price = obj.min_price_db
+        return f"{price:.2f}" if price is not None else None
 
     def get_max_price(self, obj):
-        prices = self._prices(obj)
-        return f"{max(prices):.2f}" if prices else None
+        price = obj.max_price_db
+        return f"{price:.2f}" if price is not None else None
 
     def get_total_stock(self, obj):
-        return sum(variant.stock for variant in obj.variants.all())
+        return obj.stock_total
 
     def get_variant_count(self, obj):
-        return len(obj.variants.all())
+        return obj.variant_count_db
 
     def get_stock_status(self, obj):
-        return stock_status(obj)
+        if not obj.active_variant_count:
+            return "none"
+        if not obj.active_stock_total:
+            return "out"
+        return "low" if obj.has_low else "ok"
 
 
 class AdminProductSerializer(serializers.ModelSerializer):

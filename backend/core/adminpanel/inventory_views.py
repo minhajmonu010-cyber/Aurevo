@@ -1,9 +1,9 @@
-from django.db.models import Q
+from django.db.models import Case, CharField, Count, F, IntegerField, Prefetch, Q, Sum, Value, When
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAdminUser
 
-from catalog.models import ProductVariant
+from catalog.models import ProductImage, ProductVariant
 
 
 class InventoryView(APIView):
@@ -24,7 +24,14 @@ class InventoryView(APIView):
         variants = ProductVariant.objects.select_related(
             "product",
             "product__category",
-        ).prefetch_related("product__images").order_by("product__name", "size", "color", "id")
+        ).annotate(
+            stock_status=Case(
+                When(stock__lte=0, then=Value("out")),
+                When(stock__lte=F("product__low_stock_threshold"), then=Value("low")),
+                default=Value("healthy"),
+                output_field=CharField(),
+            )
+        ).order_by("product__name", "size", "color", "id")
 
         if search:
             variants = variants.filter(
@@ -33,58 +40,58 @@ class InventoryView(APIView):
                 | Q(product__sku__icontains=search)
             )
 
-        rows = []
+        if status in {"out", "low", "healthy"}:
+            variants = variants.filter(stock_status=status)
+        elif status == "alerts":
+            variants = variants.filter(stock_status__in=("low", "out"))
+        elif status != "all":
+            variants = variants.none()
 
-        for variant in variants:
-            stock = variant.stock
-            threshold = getattr(
-                variant.product,
-                "low_stock_threshold",
-                5,
+        summary = variants.aggregate(
+            variant_count=Count("id"),
+            stock_units=Sum(
+                Case(
+                    When(stock__gt=0, then=F("stock")),
+                    default=Value(0),
+                    output_field=IntegerField(),
+                )
+            ),
+            low_stock=Count("id", filter=Q(stock_status="low")),
+            out_of_stock=Count("id", filter=Q(stock_status="out")),
+        )
+        start = (page - 1) * page_size
+        page_variants = variants[start:start + page_size].prefetch_related(
+            Prefetch(
+                "product__images",
+                queryset=ProductImage.objects.order_by("-is_primary", "id"),
+                to_attr="inventory_images",
             )
-
-            if stock <= 0:
-                stock_status = "out"
-            elif stock <= threshold:
-                stock_status = "low"
-            else:
-                stock_status = "healthy"
-
-            if status != "all" and status != stock_status:
-                continue
-
-            images = variant.product.images.all()
+        )
+        rows = []
+        for variant in page_variants:
+            images = variant.product.inventory_images
             image = images[0].image.url if images else None
-
             rows.append({
                 "id": variant.id,
                 "product_name": variant.product.name,
                 "image": request.build_absolute_uri(image) if image else None,
                 "sku": variant.sku,
-                "size": getattr(variant, "size", ""),
-                "color": getattr(variant, "color", ""),
-                "stock": stock,
-                "threshold": threshold,
-                "status": stock_status,
+                "size": variant.size,
+                "color": variant.color,
+                "stock": variant.stock,
+                "threshold": variant.product.low_stock_threshold,
+                "status": variant.stock_status,
             })
 
-        count = len(rows)
-        start = (page - 1) * page_size
         return Response({
-            "count": count,
+            "count": summary["variant_count"],
             "page": page,
             "page_size": page_size,
             "summary": {
-                "variant_count": len(rows),
-                "stock_units": sum(
-                    max(0, row["stock"]) for row in rows
-                ),
-                "low_stock": sum(
-                    row["status"] == "low" for row in rows
-                ),
-                "out_of_stock": sum(
-                    row["status"] == "out" for row in rows
-                ),
+                "variant_count": summary["variant_count"],
+                "stock_units": summary["stock_units"] or 0,
+                "low_stock": summary["low_stock"],
+                "out_of_stock": summary["out_of_stock"],
             },
-            "results": rows[start:start + page_size],
+            "results": rows,
         })

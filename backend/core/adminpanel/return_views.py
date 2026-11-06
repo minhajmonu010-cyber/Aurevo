@@ -7,8 +7,8 @@ from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from catalog.inventory import restore_order_stock
-from orders.models import OrderReturn
+from catalog.inventory import restore_order_item_stock, restore_order_stock
+from orders.models import Order, OrderReturn, OrderStatusHistory
 from wallet.models import Wallet, WalletTransaction
 
 
@@ -19,6 +19,11 @@ class AdminReturnSerializer(serializers.ModelSerializer):
     )
     customer_name = serializers.SerializerMethodField()
     customer_email = serializers.SerializerMethodField()
+    item_product_name = serializers.SerializerMethodField()
+    item_sku = serializers.SerializerMethodField()
+    item_size = serializers.SerializerMethodField()
+    item_color = serializers.SerializerMethodField()
+    item_quantity = serializers.SerializerMethodField()
 
     class Meta:
         model = OrderReturn
@@ -28,6 +33,11 @@ class AdminReturnSerializer(serializers.ModelSerializer):
             "order_number",
             "customer_name",
             "customer_email",
+            "item_product_name",
+            "item_sku",
+            "item_size",
+            "item_color",
+            "item_quantity",
             "reason",
             "status",
             "refund_amount",
@@ -49,6 +59,21 @@ class AdminReturnSerializer(serializers.ModelSerializer):
         user = getattr(obj.order, "user", None)
         return getattr(user, "email", "") if user else ""
 
+    def get_item_product_name(self, obj):
+        return obj.item.product_name if obj.item_id else ""
+
+    def get_item_sku(self, obj):
+        return obj.item.sku if obj.item_id else ""
+
+    def get_item_size(self, obj):
+        return obj.item.size if obj.item_id else ""
+
+    def get_item_color(self, obj):
+        return obj.item.color if obj.item_id else ""
+
+    def get_item_quantity(self, obj):
+        return obj.item.quantity if obj.item_id else None
+
 
 class AdminReturnStatusSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=(OrderReturn.APPROVED, OrderReturn.REJECTED))
@@ -61,6 +86,7 @@ class AdminReturnListView(APIView):
         returns = OrderReturn.objects.select_related(
             "order",
             "order__user",
+            "item",
         ).all().order_by("-created_at")
 
         search = request.query_params.get("search", "").strip()
@@ -71,6 +97,8 @@ class AdminReturnListView(APIView):
                 Q(order__order_number__icontains=search)
                 | Q(order__user__email__icontains=search)
                 | Q(reason__icontains=search)
+                | Q(item__product_name__icontains=search)
+                | Q(item__sku__icontains=search)
             )
 
         if return_status:
@@ -150,15 +178,17 @@ class AdminReturnStatusView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        order = Order.objects.select_for_update().get(pk=return_request.order_id)
         wallet_balance = None
         if new_status == OrderReturn.APPROVED:
-            restore_order_stock(
-                return_request.order,
-                note=f"Restocked approved return for order {return_request.order.order_number}",
-            )
+            note = f"Restocked approved return for order {order.order_number}"
+            if return_request.item_id:
+                restore_order_item_stock(return_request.item, note=note)
+            else:
+                restore_order_stock(order, note=note)
 
         if new_status == OrderReturn.APPROVED and return_request.refund_amount > 0:
-            wallet, _ = Wallet.objects.get_or_create(user_id=return_request.order.user_id)
+            wallet, _ = Wallet.objects.get_or_create(user_id=order.user_id)
             wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
             wallet.balance = F("balance") + return_request.refund_amount
             wallet.save(update_fields=["balance", "updated_at"])
@@ -166,7 +196,7 @@ class AdminReturnStatusView(APIView):
                 wallet=wallet,
                 transaction_type=WalletTransaction.CREDIT,
                 amount=return_request.refund_amount,
-                description=f"Refund for return {return_request.order.order_number}",
+                description=f"Refund for return {order.order_number}",
                 reference=f"return:{return_request.pk}",
             )
             wallet.refresh_from_db(fields=["balance"])
@@ -174,6 +204,24 @@ class AdminReturnStatusView(APIView):
 
         return_request.status = new_status
         return_request.save(update_fields=["status"])
+        if new_status == OrderReturn.APPROVED and return_request.item_id:
+            active_item_count = order.items.filter(is_cancelled=False).count()
+            approved_item_count = order.return_requests.filter(
+                item__is_cancelled=False,
+                status=OrderReturn.APPROVED,
+            ).values("item_id").distinct().count()
+            if (
+                active_item_count
+                and approved_item_count == active_item_count
+                and order.order_status != Order.RETURNED
+            ):
+                order.order_status = Order.RETURNED
+                order.return_reason = return_request.reason
+                order.save(update_fields=["order_status", "return_reason", "updated_at"])
+                OrderStatusHistory.objects.create(
+                    order=order,
+                    status=Order.RETURNED,
+                )
 
         return Response({
             "message": "Return request status updated.",

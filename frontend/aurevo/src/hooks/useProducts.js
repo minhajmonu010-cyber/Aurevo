@@ -4,21 +4,22 @@ import { getProducts } from "../api/catalog";
 const EMPTY = { items: [], count: 0, hasMore: false, loading: true, loadingMore: false, error: null };
 
 /** Fetch products in pages; catalog callers may request the remaining pages automatically. */
-export function useProducts({ category, search, ordering = "featured", pageSize = 8, autoLoad = false }) {
+export function useProducts({ category, search, ordering = "featured", pageSize = 8, autoLoad = false, pageNumber }) {
   const [state, setState] = useState({ ...EMPTY, requestKey: null });
   const [tick, setTick] = useState(0);
   const latest = useRef(0);
   const page = useRef(1);
-  const requestKey = JSON.stringify([category, search, ordering, pageSize, autoLoad, tick]);
+  const requestedPage = pageNumber ?? 1;
+  const requestKey = JSON.stringify([category, search, ordering, pageSize, autoLoad, pageNumber, tick]);
 
   useEffect(() => {
     const id = ++latest.current;
-    page.current = 1;
+    page.current = requestedPage;
     const fetchProducts = async () => {
       try {
-        let response = await getProducts({ category, search, ordering, page: 1, page_size: pageSize });
+        let response = await getProducts({ category, search, ordering, page: requestedPage, page_size: pageSize });
         if (id !== latest.current) return;
-        page.current = 1;
+        page.current = requestedPage;
         setState({
           ...EMPTY,
           requestKey,
@@ -61,7 +62,7 @@ export function useProducts({ category, search, ordering = "featured", pageSize 
       }
     };
     void fetchProducts();
-  }, [category, search, ordering, pageSize, autoLoad, tick, requestKey]);
+  }, [category, search, ordering, pageSize, autoLoad, pageNumber, requestedPage, tick, requestKey]);
 
   const currentState = state.requestKey === requestKey ? state : EMPTY;
 
@@ -79,5 +80,10 @@ export function useProducts({ category, search, ordering = "featured", pageSize 
   }, [category, search, ordering, pageSize, currentState.loading, currentState.loadingMore, currentState.hasMore]);
 
   const reload = useCallback(() => setTick((t) => t + 1), []);
-  return { ...currentState, loadMore, reload };
+  return {
+    ...currentState,
+    pageCount: Math.ceil((currentState.count || (pageNumber === undefined ? 0 : state.count)) / pageSize),
+    loadMore,
+    reload,
+  };
 }

@@ -66,6 +66,7 @@ export default function ProductDetail() {
     ownerId: null,
     productId: null,
     itemId: null,
+    variantId: null,
   });
   const wishlistItemId =
     wishlistState.ownerId === wishlistOwnerId &&
@@ -182,8 +183,8 @@ export default function ProductDetail() {
           setWishlistState({
             ownerId: wishlistOwnerId,
             productId: product.id,
-            itemId:
-              items.find((item) => item.product_id === product.id)?.id ?? null,
+            itemId: items.find((item) => item.product_id === product.id)?.id ?? null,
+            variantId: items.find((item) => item.product_id === product.id)?.variant_id ?? null,
           });
         }
       })
@@ -193,6 +194,7 @@ export default function ProductDetail() {
             ownerId: wishlistOwnerId,
             productId: product.id,
             itemId: null,
+            variantId: null,
           });
           toast("Could not load your wishlist.");
         }
@@ -428,9 +430,14 @@ export default function ProductDetail() {
     );
   }
 
-  const currentPrice = selectedVariant?.price ?? product.price;
-  const originalPrice =
-    selectedVariant?.original_price ?? product.original_price;
+  const basePrice = selectedVariant?.price ?? product.price;
+  const currentPrice = selectedVariant?.offer_price ?? basePrice;
+  const originalPrice = selectedVariant?.original_price ?? product.original_price;
+  const offerDiscount = Number(selectedVariant?.offer_discount || 0);
+  const referencePrice =
+    Number(originalPrice || 0) > Number(basePrice || 0)
+      ? originalPrice
+      : basePrice;
 
   const available = Boolean(selectedVariant?.in_stock && selectedVariant.stock > 0);
   const lineTotal = Number(currentPrice || 0) * quantity;
@@ -507,8 +514,16 @@ export default function ProductDetail() {
           image: selectedImage || product.image,
           size: selectedSize,
           color: selectedColor,
-          price: currentPrice,
-          line_total: lineTotal,
+          price: selectedVariant.offer_price ?? currentPrice,
+          base_price: currentPrice,
+          offer_name: selectedVariant.offer_name || "",
+          offer_discount: selectedVariant.offer_discount || "0.00",
+          offer_line_discount: (
+            Number(selectedVariant.offer_discount || 0) * quantity
+          ).toFixed(2),
+          line_total: (
+            Number(selectedVariant.offer_price ?? currentPrice) * quantity
+          ).toFixed(2),
         },
       },
     });
@@ -536,25 +551,45 @@ export default function ProductDetail() {
 
   async function handleWishlist() {
     if (!requireLogin()) return;
+    const needsVariantChoice = requireVariantSelection &&
+      variants.some((variant) => variant.size || variant.color);
+    if (needsVariantChoice && !selectedVariant) {
+      toast("Choose a size and color before adding this item to your wishlist.");
+      return;
+    }
 
     try {
       setAddingToWishlist(true);
-      if (wishlistItemId != null) {
+      const savedVariantId =
+        wishlistState.ownerId === wishlistOwnerId &&
+        wishlistState.productId === product?.id
+          ? wishlistState.variantId
+          : null;
+      if (
+        wishlistItemId != null &&
+        (selectedVariant?.id ?? null) === savedVariantId
+      ) {
         await removeWishlistItem(wishlistItemId);
         setWishlistState({
           ownerId: wishlistOwnerId,
           productId: product.id,
           itemId: null,
+          variantId: null,
         });
         toast(`${product.name} removed from your wishlist.`);
       } else {
-        const item = await addWishlistItem(product.id);
+        const item = await addWishlistItem(product.id, selectedVariant?.id);
         setWishlistState({
           ownerId: wishlistOwnerId,
           productId: product.id,
           itemId: item.id,
+          variantId: item.variant_id,
         });
-        toast(`${product.name} added to your wishlist.`);
+        toast(
+          wishlistItemId != null
+            ? `${product.name} wishlist selection updated.`
+            : `${product.name} added to your wishlist.`
+        );
       }
     } catch (error) {
       toast(
@@ -587,6 +622,13 @@ export default function ProductDetail() {
                 className="pd-image-open"
                 type="button"
                 onClick={() => setImagePreviewOpen(true)}
+                onMouseMove={(event) => {
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  const x = ((event.clientX - bounds.left) / bounds.width) * 100;
+                  const y = ((event.clientY - bounds.top) / bounds.height) * 100;
+                  event.currentTarget.style.setProperty("--zoom-x", `${x}%`);
+                  event.currentTarget.style.setProperty("--zoom-y", `${y}%`);
+                }}
                 aria-label={`Preview ${product.name} image`}
               >
                 <img src={selectedImage} alt={product.name} />
@@ -602,7 +644,7 @@ export default function ProductDetail() {
               type="button"
               className={`pd-wishlist pd-image-wishlist${wishlistItemId != null ? " is-active" : ""}`}
               onClick={handleWishlist}
-              aria-label={`${wishlistItemId != null ? "Remove" : "Add"} ${product.name} ${wishlistItemId != null ? "from" : "to"} wishlist`}
+              aria-label={`${wishlistItemId != null ? "Remove or update" : "Add"} ${product.name} ${selectedVariant ? `${selectedVariant.color} ${selectedVariant.size}` : ""} ${wishlistItemId != null ? "in" : "to"} wishlist`}
               aria-pressed={wishlistItemId != null}
               disabled={addingToWishlist || loadingWishlist}
               aria-busy={addingToWishlist}
@@ -662,22 +704,27 @@ export default function ProductDetail() {
           <div className="pd-prices">
             <strong>{formatPrice(currentPrice)}</strong>
 
-            {originalPrice &&
-              Number(originalPrice) > Number(currentPrice) && (
-                <>
-                  <del>{formatPrice(originalPrice)}</del>
-                  <span className="pd-save">
-                    Save{" "}
-                    {Math.round(
-                      ((Number(originalPrice) - Number(currentPrice)) /
-                        Number(originalPrice)) *
-                        100
-                    )}
-                    %
-                  </span>
-                </>
-              )}
+            {Number(referencePrice) > Number(currentPrice) && (
+              <>
+                <del>{formatPrice(referencePrice)}</del>
+                <span className="pd-save">
+                  Save{" "}
+                  {Math.round(
+                    ((Number(referencePrice) - Number(currentPrice)) /
+                      Number(referencePrice)) *
+                      100
+                  )}
+                  %
+                </span>
+              </>
+            )}
           </div>
+          {selectedVariant?.offer_name && offerDiscount > 0 && (
+            <p className="pd-active-offer">
+              <strong>{selectedVariant.offer_name}</strong>
+              <span>Save {formatPrice(offerDiscount)} per item</span>
+            </p>
+          )}
 
           <p className={available ? "pd-stock in-stock" : "pd-stock out-stock"} aria-live="polite">
             <span />

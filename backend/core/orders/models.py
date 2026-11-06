@@ -20,6 +20,7 @@ class Order(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="orders")
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    coupon_discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     shipping_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     order_status = models.CharField(max_length=50, choices=STATUSES, default=PENDING)
     return_reason = models.TextField(blank=True, default="")
@@ -60,6 +61,8 @@ class OrderItem(models.Model):
     quantity = models.PositiveIntegerField()
     price = models.DecimalField(max_digits=10, decimal_places=2)  # price of one unit when it was bought
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
+    is_cancelled = models.BooleanField(default=False)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "order_item"
@@ -67,8 +70,16 @@ class OrderItem(models.Model):
 
 
 class Payment(models.Model):
-    PENDING, PAID, FAILED, REFUNDED = "pending", "paid", "failed", "refunded"
-    STATUSES = [(PENDING, "Pending"), (PAID, "Paid"), (FAILED, "Failed"), (REFUNDED, "Refunded")]
+    PENDING, PAID, FAILED, REFUND_PENDING, REFUNDED = (
+        "pending", "paid", "failed", "refund_pending", "refunded",
+    )
+    STATUSES = [
+        (PENDING, "Pending"),
+        (PAID, "Paid"),
+        (FAILED, "Failed"),
+        (REFUND_PENDING, "Refund pending"),
+        (REFUNDED, "Refunded"),
+    ]
 
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="payments")  # one order can have several attempts
     payment_method = models.CharField(max_length=50, blank=True)
@@ -76,6 +87,9 @@ class Payment(models.Model):
     gateway_order_id = models.CharField(max_length=50, blank=True, default="")
     transaction_id = models.CharField(max_length=100, unique=True, null=True, blank=True)
     payment_status = models.CharField(max_length=50, choices=STATUSES, default=PENDING)
+    refunded_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    pending_refund_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    refund_id = models.CharField(max_length=100, blank=True, default="")
     paid_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -103,7 +117,14 @@ class OrderReturn(models.Model):
         (REJECTED, "Rejected"),
     ]
 
-    order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name="return_request")
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="return_requests")
+    item = models.ForeignKey(
+        OrderItem,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="return_requests",
+    )
     reason = models.TextField()
     status = models.CharField(max_length=20, choices=STATUSES, default=REQUESTED)
     refund_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)

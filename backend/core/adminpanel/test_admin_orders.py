@@ -1,6 +1,8 @@
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.core.cache import cache
+from django.test import override_settings
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -131,6 +133,133 @@ class AdminOrdersTests(APITestCase):
         )
         self.assertEqual(reopened.status_code, 400)
 
+    def test_admin_can_refund_paid_cancellation_to_wallet_once(self):
+        self.variant.stock = 9
+        self.variant.save(update_fields=["stock"])
+
+        cancelled = self.client.patch(
+            f"{BASE}{self.order.pk}/status/",
+            {"status": Order.CANCELLED, "refund_to_wallet": True},
+            format="json",
+        )
+
+        self.assertEqual(cancelled.status_code, 200, cancelled.data)
+        self.assertEqual(cancelled.data["refund"], {"amount": "30.00", "method": "wallet"})
+        wallet = Wallet.objects.get(user=self.customer)
+        self.assertEqual(wallet.balance, self.order.total_amount)
+        transaction_record = WalletTransaction.objects.get(wallet=wallet)
+        self.assertEqual(transaction_record.transaction_type, WalletTransaction.CREDIT)
+        self.assertEqual(transaction_record.reference, f"order:{self.order.order_number}:admin-cancellation")
+        payment = Payment.objects.get(order=self.order)
+        self.assertEqual(payment.payment_status, Payment.REFUNDED)
+        self.assertEqual(payment.refunded_amount, self.order.total_amount)
+
+        duplicate = self.client.patch(
+            f"{BASE}{self.order.pk}/status/",
+            {"status": Order.CANCELLED, "refund_to_wallet": True},
+            format="json",
+        )
+        self.assertEqual(duplicate.status_code, 200)
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, self.order.total_amount)
+        self.assertEqual(wallet.transactions.count(), 1)
+
+    def test_admin_refund_requires_successful_payment_and_rolls_back_cancellation(self):
+        Payment.objects.filter(order=self.order).update(payment_status=Payment.FAILED)
+        self.variant.stock = 9
+        self.variant.save(update_fields=["stock"])
+
+        response = self.client.patch(
+            f"{BASE}{self.order.pk}/status/",
+            {"status": Order.CANCELLED, "refund_to_wallet": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.order.refresh_from_db()
+        self.variant.refresh_from_db()
+        self.assertEqual(self.order.order_status, Order.PENDING)
+        self.assertEqual(self.variant.stock, 9)
+        self.assertFalse(Wallet.objects.filter(user=self.customer).exists())
+        self.assertFalse(WalletTransaction.objects.exists())
+
+    @override_settings(RAZORPAY_KEY_ID="rzp_test_key", RAZORPAY_KEY_SECRET="test_secret")
+    def test_admin_can_check_failed_razorpay_refund_then_credit_wallet(self):
+        self.order.order_status = Order.CANCELLED
+        self.order.save(update_fields=["order_status"])
+        payment = Payment.objects.get(order=self.order)
+        payment.payment_method = "razorpay"
+        payment.payment_status = Payment.REFUND_PENDING
+        payment.transaction_id = "pay_admin_refund"
+        payment.refund_id = "rfnd_admin_refund"
+        payment.refunded_amount = Decimal("30.00")
+        payment.pending_refund_amount = Decimal("30.00")
+        payment.save()
+
+        with patch("adminpanel.order_views.requests.get") as mock_get:
+            mock_get.return_value.json.return_value = {
+                "id": "rfnd_admin_refund",
+                "amount": 3000,
+                "status": "failed",
+            }
+            checked = self.client.post(f"{BASE}{self.order.pk}/refund-status/")
+
+        self.assertEqual(checked.status_code, 200, checked.data)
+        self.assertEqual(checked.data["provider_status"], "failed")
+        payment.refresh_from_db()
+        self.assertEqual(payment.payment_status, Payment.PAID)
+        self.assertEqual(payment.refunded_amount, Decimal("0.00"))
+        self.assertEqual(payment.pending_refund_amount, Decimal("0.00"))
+
+        wallet_refund = self.client.post(f"{BASE}{self.order.pk}/wallet-refund/")
+        self.assertEqual(wallet_refund.status_code, 200, wallet_refund.data)
+        self.assertEqual(wallet_refund.data["refund"], {"amount": "30.00", "method": "wallet"})
+        wallet = Wallet.objects.get(user=self.customer)
+        self.assertEqual(wallet.balance, Decimal("30.00"))
+        payment.refresh_from_db()
+        self.assertEqual(payment.payment_status, Payment.REFUNDED)
+        self.assertEqual(payment.refunded_amount, Decimal("30.00"))
+
+        duplicate = self.client.post(f"{BASE}{self.order.pk}/wallet-refund/")
+        self.assertEqual(duplicate.status_code, 400)
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, Decimal("30.00"))
+
+    @override_settings(RAZORPAY_KEY_ID="rzp_test_key", RAZORPAY_KEY_SECRET="test_secret")
+    def test_admin_can_immediately_credit_wallet_while_razorpay_refund_is_pending(self):
+        self.order.order_status = Order.CANCELLED
+        self.order.save(update_fields=["order_status"])
+        Payment.objects.filter(order=self.order).update(
+            payment_method="razorpay",
+            payment_status=Payment.REFUND_PENDING,
+            refund_id="rfnd_still_pending",
+            refunded_amount=Decimal("30.00"),
+            pending_refund_amount=Decimal("30.00"),
+        )
+
+        with patch("adminpanel.order_views.requests.get") as mock_get:
+            mock_get.return_value.json.return_value = {
+                "id": "rfnd_still_pending",
+                "amount": 3000,
+                "status": "pending",
+            }
+            checked = self.client.post(f"{BASE}{self.order.pk}/refund-status/")
+        self.assertEqual(checked.status_code, 200, checked.data)
+        self.assertEqual(checked.data["provider_status"], "pending")
+
+        wallet_refund = self.client.post(f"{BASE}{self.order.pk}/wallet-refund/")
+        self.assertEqual(wallet_refund.status_code, 200, wallet_refund.data)
+        self.assertEqual(wallet_refund.data["refund"], {"amount": "30.00", "method": "wallet"})
+        wallet = Wallet.objects.get(user=self.customer)
+        self.assertEqual(wallet.balance, Decimal("30.00"))
+        payment = Payment.objects.get(order=self.order)
+        self.assertEqual(payment.payment_status, Payment.REFUNDED)
+        self.assertEqual(payment.pending_refund_amount, Decimal("0.00"))
+        self.assertEqual(self.client.post(f"{BASE}{self.order.pk}/wallet-refund/").status_code, 400)
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, Decimal("30.00"))
+        self.assertEqual(wallet.transactions.count(), 1)
+
     def test_invalid_filters_and_updates_return_validation_errors(self):
         self.assertEqual(self.client.get(BASE, {"start": "not-a-date"}).status_code, 400)
         self.assertEqual(self.client.get(BASE, {"start": "2026-10-02", "end": "2026-10-01"}).status_code, 400)
@@ -194,6 +323,55 @@ class AdminOrdersTests(APITestCase):
         self.assertEqual(wallet.transactions.count(), 1)
         self.variant.refresh_from_db()
         self.assertEqual(self.variant.stock, 10)
+
+    def test_approving_item_return_refunds_and_restocks_only_that_item(self):
+        second_variant = ProductVariant.objects.create(
+            product=self.variant.product,
+            size="L",
+            color="Navy",
+            sku="ORDER-TEST-L",
+            price=Decimal("15.00"),
+            stock=7,
+        )
+        second_item = OrderItem.objects.create(
+            order=self.order,
+            variant=second_variant,
+            category=self.variant.product.category,
+            product_name="Second order test product",
+            sku=second_variant.sku,
+            size=second_variant.size,
+            color=second_variant.color,
+            quantity=1,
+            price=Decimal("15.00"),
+            total_price=Decimal("15.00"),
+        )
+        self.order.order_status = Order.DELIVERED
+        self.order.save(update_fields=["order_status"])
+        self.variant.stock = 9
+        self.variant.save(update_fields=["stock"])
+        return_request = OrderReturn.objects.create(
+            order=self.order,
+            item=self.order.items.first(),
+            reason="Wrong size.",
+            refund_amount=Decimal("25.00"),
+        )
+
+        response = self.client.patch(
+            f"/api/admin/auth/returns/{return_request.pk}/status/",
+            {"status": "approved"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.variant.refresh_from_db()
+        second_variant.refresh_from_db()
+        self.assertEqual(self.variant.stock, 10)
+        self.assertEqual(second_variant.stock, 7)
+        self.assertEqual(second_item.return_requests.count(), 0)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.order_status, Order.DELIVERED)
+        wallet = Wallet.objects.get(user=self.customer)
+        self.assertEqual(wallet.balance, Decimal("25.00"))
 
     def test_rejecting_a_return_does_not_credit_the_wallet(self):
         self.variant.stock = 9

@@ -69,6 +69,7 @@ export default function Offers() {
   const [targetsError, setTargetsError] = useState("");
   const [targetSearch, setTargetSearch] = useState("");
   const [error, setError] = useState("");
+  const [validationErrorKey, setValidationErrorKey] = useState(null);
   const [offerToDelete, setOfferToDelete] = useState(null);
   const [deleteError, setDeleteError] = useState("");
   const [deletingOffer, setDeletingOffer] = useState(false);
@@ -81,6 +82,34 @@ export default function Offers() {
       currency: "INR",
       maximumFractionDigits: 2,
     }).format(Number(value || 0));
+
+  const showValidationError = (message, key) => {
+    setError(message);
+    setValidationErrorKey(key);
+  };
+  const validationErrorFixed = (key, values) => {
+    const discount = Number(values.discount_value);
+    if (key === "name") return Boolean(values.name.trim());
+    if (key === "dates_required") return Boolean(values.start_date && values.end_date);
+    if (key === "date_order") {
+      return Boolean(values.start_date && values.end_date) &&
+        new Date(values.end_date) > new Date(values.start_date);
+    }
+    if (key === "discount_value") return Number.isFinite(discount) && discount > 0;
+    if (key === "discount_limit") return values.discount_type !== "percentage" || discount <= 100;
+    if (key === "target_ids") {
+      return values.applies_to === "all" ||
+        (values.target_ids.length > 0 && values.target_ids.every((id) => Number.isInteger(Number(id)) && Number(id) > 0));
+    }
+    return false;
+  };
+  const closeModal = () => {
+    setModalOpen(false);
+    if (validationErrorKey) {
+      setError("");
+      setValidationErrorKey(null);
+    }
+  };
 
   const loadOffers = useCallback(async () => {
     try {
@@ -131,16 +160,25 @@ export default function Offers() {
 
   function handleChange(event) {
     const { name, value, checked, type } = event.target;
+    const nextForm = {
+      ...form,
+      [name]: type === "checkbox" ? checked : value,
+    };
     setForm((previous) => ({
       ...previous,
       [name]: type === "checkbox" ? checked : value,
     }));
+    if (error && modalOpen && (!validationErrorKey || validationErrorFixed(validationErrorKey, nextForm))) {
+      setError("");
+      setValidationErrorKey(null);
+    }
   }
 
   function openCreate() {
     setEditingId(null);
     setForm(initialForm);
     setError("");
+    setValidationErrorKey(null);
     setTargetSearch("");
     setTargetsLoading(true);
     setTargetsError("");
@@ -161,6 +199,7 @@ export default function Offers() {
       is_active: offer.is_active,
     });
     setError("");
+    setValidationErrorKey(null);
     setTargetSearch("");
     setTargetsLoading(true);
     setTargetsError("");
@@ -181,6 +220,7 @@ export default function Offers() {
       is_active: false,
     });
     setError("");
+    setValidationErrorKey(null);
     setTargetSearch("");
     setTargetsLoading(true);
     setTargetsError("");
@@ -190,26 +230,27 @@ export default function Offers() {
   async function handleSubmit(event) {
     event.preventDefault();
     setError("");
+    setValidationErrorKey(null);
 
     if (!form.start_date || !form.end_date) {
-      setError("Select both start and end dates.");
+      showValidationError("Select both start and end dates.", "dates_required");
       return;
     }
 
     if (new Date(form.end_date) <= new Date(form.start_date)) {
-      setError("End date must be after start date.");
+      showValidationError("End date must be after start date.", "date_order");
       return;
     }
 
     const discount = Number(form.discount_value);
 
     if (!Number.isFinite(discount) || discount <= 0) {
-      setError("Enter a discount greater than zero.");
+      showValidationError("Enter a discount greater than zero.", "discount_value");
       return;
     }
 
     if (form.discount_type === "percentage" && discount > 100) {
-      setError("Percentage discount cannot exceed 100%.");
+      showValidationError("Percentage discount cannot exceed 100%.", "discount_limit");
       return;
     }
 
@@ -224,7 +265,7 @@ export default function Offers() {
           (id) => !Number.isInteger(id) || id <= 0
         )
       ) {
-        setError("Select at least one valid product or category.");
+        showValidationError("Select at least one valid product or category.", "target_ids");
         return;
       }
     }
@@ -242,7 +283,7 @@ export default function Offers() {
     };
 
     if (!payload.name) {
-      setError("Offer name is required.");
+      showValidationError("Offer name is required.", "name");
       return;
     }
 
@@ -256,6 +297,7 @@ export default function Offers() {
       }
 
       setModalOpen(false);
+      setValidationErrorKey(null);
       await loadOffers();
     } catch (err) {
       const data = err.response?.data;
@@ -268,6 +310,7 @@ export default function Offers() {
           ? firstError
           : "Could not save offer. Check the entered details."
       );
+      setValidationErrorKey(null);
     } finally {
       setSaving(false);
     }
@@ -316,6 +359,16 @@ export default function Offers() {
         ? [...new Set([...previous.target_ids, selectedId])]
         : previous.target_ids.filter((targetId) => targetId !== selectedId),
     }));
+    const nextForm = {
+      ...form,
+      target_ids: checked
+        ? [...new Set([...form.target_ids, selectedId])]
+        : form.target_ids.filter((targetId) => targetId !== selectedId),
+    };
+    if (error && modalOpen && (!validationErrorKey || validationErrorFixed(validationErrorKey, nextForm))) {
+      setError("");
+      setValidationErrorKey(null);
+    }
   }
 
   const targetOptions = form.applies_to === "products" ? products : categories;
@@ -510,11 +563,11 @@ export default function Offers() {
         <Modal
           title={editingId ? "Edit Offer" : "Create Offer"}
           eyebrow="Campaign settings"
-          onClose={() => setModalOpen(false)}
+          onClose={closeModal}
           locked={saving}
           footer={
             <>
-              <button type="button" className="ad-btn ghost" onClick={() => setModalOpen(false)} disabled={saving}>Cancel</button>
+              <button type="button" className="ad-btn ghost" onClick={closeModal} disabled={saving}>Cancel</button>
               <button type="submit" form="admin-offer-form" className="ad-btn primary" disabled={saving}>
                 {saving ? "Saving..." : editingId ? "Save Changes" : "Create Offer"}
               </button>
@@ -590,12 +643,17 @@ export default function Offers() {
                     name="applies_to"
                     value={form.applies_to}
                     onChange={(event) => {
-                      setForm((previous) => ({
-                        ...previous,
+                      const nextForm = {
+                        ...form,
                         applies_to: event.target.value,
                         target_ids: [],
-                      }));
+                      };
+                      setForm(nextForm);
                       setTargetSearch("");
+                      if (error && validationErrorKey === "target_ids" && validationErrorFixed("target_ids", nextForm)) {
+                        setError("");
+                        setValidationErrorKey(null);
+                      }
                     }}
                   >
                     <option value="all">All Products</option>

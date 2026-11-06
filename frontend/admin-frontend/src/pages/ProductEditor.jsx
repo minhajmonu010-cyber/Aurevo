@@ -107,8 +107,56 @@ export default function ProductEditor() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty, saving]);
 
-  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
-  const toggleIn = (list, setList, value) => setList(list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
+  const isValidField = (key, value) => {
+    if (key === "name") return value.trim().length >= 2;
+    if (key === "sku") return Boolean(value.trim());
+    if (key === "category") return Boolean(value);
+    if (key === "low_stock_threshold") return /^\d+$/.test(String(value));
+    if (key === "cost_price") return value === "" || (Number.isFinite(Number(value)) && Number(value) >= 0);
+    if (key === "basePrice") return money(value);
+    if (key === "offerPrice") {
+      return value === "" || (money(value) && money(basePrice) && Number(value) < Number(basePrice));
+    }
+    if (key === "sizes") return value.length > 0;
+    if (key === "colors") return value.length > 0;
+    if (key === "variantStock") {
+      return sizes.every((size) =>
+        colors.every((color) => /^\d+$/.test(stockForVariant(size, color)))
+      );
+    }
+    if (key === "form") return false;
+    return true;
+  };
+  const set = (key, value) => {
+    const nextForm = { ...form, [key]: value };
+    setForm(nextForm);
+    setErrors((current) => {
+      const next = { ...current };
+      const valid = isValidField(key, value);
+      if (current[key] && valid) delete next[key];
+      if (key === "basePrice" && current.offerPrice && isValidField("offerPrice", offerPrice)) {
+        delete next.offerPrice;
+      }
+      if (valid) delete next.form;
+      return next;
+    });
+  };
+  const toggleIn = (list, setList, value) => {
+    const next = list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
+    setList(next);
+    const key = setList === setSizes ? "sizes" : "colors";
+    setErrors((current) => {
+      const errors = { ...current };
+      if (next.length > 0) delete errors[key];
+      const nextSizes = key === "sizes" ? next : sizes;
+      const nextColors = key === "colors" ? next : colors;
+      if (nextSizes.every((size) => nextColors.every((color) => /^\d+$/.test(stockForVariant(size, color))))) {
+        delete errors.variantStock;
+      }
+      if (next.length > 0) delete errors.form;
+      return errors;
+    });
+  };
   const variantCount = sizes.length * colors.length;
   const variantStockKey = (size, color) => `${size}\u0000${color}`;
   const stockForVariant = (size, color) => variantStocks[variantStockKey(size, color)] ?? "0";
@@ -121,11 +169,24 @@ export default function ProductEditor() {
       }, 0),
     0
   );
-  const setVariantStock = (size, color, value) =>
+  const setVariantStock = (size, color, value) => {
+    const nextStocks = { ...variantStocks, [variantStockKey(size, color)]: value };
     setVariantStocks((current) => ({
       ...current,
       [variantStockKey(size, color)]: value,
     }));
+    setErrors((current) => {
+      const next = { ...current };
+      const valid = sizes.every((itemSize) =>
+        colors.every((itemColor) => /^\d+$/.test(nextStocks[variantStockKey(itemSize, itemColor)] ?? "0"))
+      );
+      if (valid) {
+        delete next.variantStock;
+        delete next.form;
+      }
+      return next;
+    });
+  };
 
   if (editing && loaded.error) {
     return loaded.error.response?.status === 404 ? (
@@ -374,8 +435,31 @@ export default function ProductEditor() {
                 <div className="ad-section-title"><Icon name="rupee" size={18} /> Pricing &amp; stock</div>
                 <p className="ad-section-sub">Set pricing for all variants here. Inventory is entered separately for each size and colour below.</p>
                 <div className="ad-form-grid three">
-                  {wrap("basePrice", "Base price (₹) *", <input id="p-basePrice" className="ad-input" inputMode="decimal" value={basePrice} onChange={(e) => setBasePrice(e.target.value)} placeholder="1999.00" />)}
-                  {wrap("offerPrice", "Offer price (₹)", <input id="p-offerPrice" className="ad-input" inputMode="decimal" value={offerPrice} onChange={(e) => setOfferPrice(e.target.value)} placeholder="1499.00" />, "Optional. Shoppers pay this; the base price is shown crossed out.")}
+                  {wrap("basePrice", "Base price (₹) *", <input id="p-basePrice" className="ad-input" inputMode="decimal" value={basePrice} onChange={(e) => {
+                    const value = e.target.value;
+                    setBasePrice(value);
+                    setErrors((current) => {
+                      const next = { ...current };
+                      if (money(value)) {
+                        delete next.basePrice;
+                        delete next.form;
+                      }
+                      if (offerPrice === "" || (money(offerPrice) && Number(offerPrice) < Number(value))) delete next.offerPrice;
+                      return next;
+                    });
+                  }} placeholder="1999.00" />)}
+                  {wrap("offerPrice", "Offer price (₹)", <input id="p-offerPrice" className="ad-input" inputMode="decimal" value={offerPrice} onChange={(e) => {
+                    const value = e.target.value;
+                    setOfferPrice(value);
+                    if (value === "" || (money(value) && money(basePrice) && Number(value) < Number(basePrice))) {
+                      setErrors((current) => {
+                        const next = { ...current };
+                        delete next.offerPrice;
+                        delete next.form;
+                        return next;
+                      });
+                    }
+                  }} placeholder="1499.00" />, "Optional. Shoppers pay this; the base price is shown crossed out.")}
                   {wrap("cost_price", "Unit cost (₹)", <input id="p-cost_price" className="ad-input" inputMode="decimal" value={form.cost_price} onChange={(e) => set("cost_price", e.target.value)} placeholder="Optional" />, "Only you see this.")}
                   {wrap("low_stock_threshold", "Low-stock alert threshold (per variant)", <input id="p-low_stock_threshold" className="ad-input" inputMode="numeric" value={form.low_stock_threshold} onChange={(e) => set("low_stock_threshold", e.target.value)} />, "Alert when any single size/colour variant reaches this stock level. This does not set inventory.")}
                 </div>
@@ -389,7 +473,7 @@ export default function ProductEditor() {
                   <div className="ad-chips">
                     {[...SIZES, ...sizes.filter((s) => !SIZES.includes(s))].map((s) => <button type="button" key={s} className={`ad-chip${sizes.includes(s) ? " on" : ""}`} aria-pressed={sizes.includes(s)} onClick={() => toggleIn(sizes, setSizes, s)}>{s}</button>)}
                     <input className="ad-input" style={{ width: 120, minHeight: 36 }} value={customSize} onChange={(e) => setCustomSize(e.target.value)} placeholder="Other, e.g. 32" aria-label="Add another size"
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); const v = customSize.trim().toUpperCase(); if (v && !sizes.includes(v)) setSizes([...sizes, v]); setCustomSize(""); } }} />
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); const v = customSize.trim().toUpperCase(); if (v && !sizes.includes(v)) toggleIn(sizes, setSizes, v); setCustomSize(""); } }} />
                   </div>
                   {fieldError("sizes")}
                 </div>
@@ -402,7 +486,7 @@ export default function ProductEditor() {
                       </button>
                     ))}
                     <input className="ad-input" style={{ width: 150, minHeight: 36 }} value={customColor} onChange={(e) => setCustomColor(e.target.value)} placeholder="Other colour name" aria-label="Add another colour"
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); const v = customColor.trim(); if (v && !colors.some((c) => c.toLowerCase() === v.toLowerCase())) setColors([...colors, v]); setCustomColor(""); } }} />
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); const v = customColor.trim(); if (v && !colors.some((c) => c.toLowerCase() === v.toLowerCase())) toggleIn(colors, setColors, v); setCustomColor(""); } }} />
                   </div>
                   {fieldError("colors")}
                 </div>
@@ -615,6 +699,19 @@ function StockModal({ variant, onClose, onDone }) {
     }
   };
 
+  const changeQuantity = (value) => {
+    setQuantity(value);
+    if (/^\d+$/.test(value) && Number(value) >= 1 && (type !== "OUT" || Number(value) <= variant.stock)) {
+      setError("");
+    }
+  };
+  const changeType = (nextType) => {
+    setType(nextType);
+    if (/^\d+$/.test(quantity) && Number(quantity) >= 1 && (nextType !== "OUT" || Number(quantity) <= variant.stock)) {
+      setError("");
+    }
+  };
+
   return (
     <Modal title={`Stock: size ${variant.size}, ${variant.color}`} width={440} onClose={onClose} locked={busy}
       footer={<><button type="button" className="ad-btn ghost" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" form="stock-form" className="ad-btn primary" disabled={busy}>{busy ? "Saving…" : "Update stock"}</button></>}>
@@ -622,11 +719,11 @@ function StockModal({ variant, onClose, onDone }) {
         <p className="ad-modal-text" style={{ marginBottom: 14 }}>In stock now: <b>{variant.stock}</b> units.</p>
         {error && <div className="ad-alert" role="alert">{error}</div>}
         <div className="ad-seg" style={{ marginBottom: 14 }}>
-          <button type="button" className={type === "IN" ? "on" : ""} onClick={() => setType("IN")}>Add stock</button>
-          <button type="button" className={type === "OUT" ? "on" : ""} onClick={() => setType("OUT")}>Remove stock</button>
+          <button type="button" className={type === "IN" ? "on" : ""} onClick={() => changeType("IN")}>Add stock</button>
+          <button type="button" className={type === "OUT" ? "on" : ""} onClick={() => changeType("OUT")}>Remove stock</button>
         </div>
         <div className="ad-form-grid">
-          <div className="ad-field"><label className="ad-label" htmlFor="st-q">Units</label><input id="st-q" className="ad-input" inputMode="numeric" value={quantity} onChange={(e) => setQuantity(e.target.value)} autoFocus /></div>
+          <div className="ad-field"><label className="ad-label" htmlFor="st-q">Units</label><input id="st-q" className="ad-input" inputMode="numeric" value={quantity} onChange={(e) => changeQuantity(e.target.value)} autoFocus /></div>
           <div className="ad-field"><label className="ad-label" htmlFor="st-n">Note</label><input id="st-n" className="ad-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="New delivery, damaged…" /></div>
         </div>
       </form>

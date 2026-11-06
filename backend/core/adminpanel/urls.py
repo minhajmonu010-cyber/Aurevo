@@ -2,7 +2,13 @@ from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 from .inventory_views import InventoryView
 from .dashboard_views import SalesReportView
-from .order_views import AdminOrderDetailView, AdminOrderListView, AdminOrderStatusView
+from .order_views import (
+    AdminOrderDetailView,
+    AdminOrderListView,
+    AdminOrderRefundStatusView,
+    AdminOrderStatusView,
+    AdminOrderWalletRefundView,
+)
 from .customer_views import (AdminCustomerListView,AdminCustomerDetailView,)
 from .return_views import (AdminReturnListView,AdminReturnStatusView,)
 from .coupon_views import (AdminCouponListCreateView,AdminCouponDetailView,)
@@ -23,6 +29,8 @@ urlpatterns = [
     path("orders/", AdminOrderListView.as_view(), name="admin-orders"),
     path("orders/<int:order_id>/", AdminOrderDetailView.as_view(), name="admin-order-detail"),
     path("orders/<int:order_id>/status/", AdminOrderStatusView.as_view(), name="admin-order-status"),
+    path("orders/<int:order_id>/refund-status/", AdminOrderRefundStatusView.as_view(), name="admin-order-refund-status"),
+    path("orders/<int:order_id>/wallet-refund/", AdminOrderWalletRefundView.as_view(), name="admin-order-wallet-refund"),
     path("customers/",AdminCustomerListView.as_view(),name="admin-customers",),
     path("customers/<int:customer_id>/",AdminCustomerDetailView.as_view(),name="admin-customer-detail",),
     path("returns/",AdminReturnListView.as_view(),name="admin-returns",),

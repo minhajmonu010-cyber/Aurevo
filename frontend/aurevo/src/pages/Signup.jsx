@@ -17,7 +17,25 @@ export default function Signup() {
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const update = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
+  const update = (e) => {
+    const { name, value } = e.target;
+    const nextForm = { ...form, [name]: value };
+    setForm(nextForm);
+    setErrors((current) => {
+      const next = { ...current };
+      if (name === "full_name" && value.trim().length >= 2) next.full_name = undefined;
+      if (name === "email" && isEmail(value)) next.email = undefined;
+      if (name === "password") {
+        if (!passwordProblem(value)) next.password = undefined;
+        if (nextForm.confirm_password === value) next.confirm_password = undefined;
+      }
+      if (name === "confirm_password" && value === nextForm.password) {
+        next.confirm_password = undefined;
+      }
+      return next;
+    });
+    setFormError("");
+  };
 
   const validate = () => {
     const next = {};
@@ -84,7 +102,14 @@ export default function Signup() {
         <Field label="Confirm Password" name="confirm_password" type="password" icon="lock" placeholder="••••••••" value={form.confirm_password} onChange={update} error={errors.confirm_password} autoComplete="new-password" />
         <div className="terms">
           <label className="check">
-            <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={accepted}
+              onChange={(e) => {
+                setAccepted(e.target.checked);
+                if (e.target.checked) setErrors((current) => ({ ...current, terms: undefined }));
+              }}
+            />
             <span>
               I agree to the{" "}
               <Link to="/terms">Terms of Service</Link> and{" "}

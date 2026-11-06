@@ -20,8 +20,32 @@ export default function CategoryModal({ onClose, onCreated }) {
   const [saving, setSaving] = useState(false);
   const preview = useObjectUrl(file);
 
-  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
-  const setName = (name) => setForm((f) => ({ ...f, name, slug: slugTouched ? f.slug : slugify(name) }));
+  const set = (key, value) => {
+    setForm((current) => ({ ...current, [key]: value }));
+    setErrors((current) => {
+      const valid = key === "priority"
+        ? value === "" || (/^\d+$/.test(value) && Number(value) <= 9998)
+        : key === "slug"
+          ? /^[a-z0-9]+(-[a-z0-9]+)*$/.test(value)
+          : true;
+      if (!valid || !current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      delete next.form;
+      return next;
+    });
+  };
+  const setName = (name) => {
+    const slug = slugTouched ? form.slug : slugify(name);
+    setForm((current) => ({ ...current, name, slug }));
+    setErrors((current) => {
+      const next = { ...current };
+      if (name.trim().length >= 2) delete next.name;
+      if (slug) delete next.slug;
+      if (name.trim().length >= 2 || slug) delete next.form;
+      return next;
+    });
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -103,7 +127,16 @@ export default function CategoryModal({ onClose, onCreated }) {
                 </div>
               </div>
             ) : (
-              <DropZone onFiles={([f]) => setCropFile(f)} onError={(message) => setErrors((e) => ({ ...e, image: message }))} hint={`JPG, PNG, WEBP (max ${MAX_MB} MB)`} />
+              <DropZone onFiles={([f]) => setCropFile(f)} onError={(message) => {
+                if (message) setErrors((current) => ({ ...current, image: message }));
+                else setErrors((current) => {
+                  if (!current.image) return current;
+                  const next = { ...current };
+                  delete next.image;
+                  delete next.form;
+                  return next;
+                });
+              }} hint={`JPG, PNG, WEBP (max ${MAX_MB} MB)`} />
             )}
             {errors.image && <p className="ad-field-error">{errors.image}</p>}
           </div>

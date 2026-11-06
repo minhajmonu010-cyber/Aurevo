@@ -27,5 +27,4 @@ class DashboardOrderSerializer(serializers.ModelSerializer):
         return obj.latest_payment_status or "pending"
 
     def get_items_count(self, obj):
-        return sum(item.quantity for item in obj.items.all())
-
+        return obj.items_count

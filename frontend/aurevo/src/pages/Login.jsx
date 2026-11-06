@@ -14,14 +14,26 @@ export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
   const notice = location.state?.message;
-  const redirectTo = "/";
+  const requestedLocation = location.state?.from;
+  const redirectTo =
+    requestedLocation?.pathname?.startsWith("/") &&
+    !requestedLocation.pathname.startsWith("//")
+      ? `${requestedLocation.pathname}${requestedLocation.search || ""}${requestedLocation.hash || ""}`
+      : "/";
 
   const [form, setForm] = useState({ email: location.state?.email || "", password: "" });
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const update = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
+  const update = (e) => {
+    const { name, value } = e.target;
+    setForm((current) => ({ ...current, [name]: value }));
+    if ((name === "email" && isEmail(value)) || (name === "password" && value)) {
+      setErrors((current) => ({ ...current, [name]: undefined }));
+    }
+    setFormError("");
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();

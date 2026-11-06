@@ -42,7 +42,7 @@ function queryKey(params = {}) {
 export const getCategories = () =>
   cachedPublicRequest("categories", () => api.get("/catalog/categories/"));
 
-// -> [{ id, name, description, discount_type, discount_value, applies_to, target_names, end_date }]
+// -> [{ id, name, description, discount_type, discount_value, applies_to, target_names, target_slugs, end_date }]
 export const getOffers = () =>
   cachedPublicRequest("offers", () => api.get("/catalog/offers/"));
 
@@ -67,7 +67,10 @@ export const removeCartItem = (id) =>
   data(api.delete(`/shop/cart/${id}/`));
 
 export const getWishlist = () => data(api.get("/shop/wishlist/"));
-export const addWishlistItem = (productId) =>
-  data(api.post("/shop/wishlist/", { product_id: productId }));
+export const addWishlistItem = (productId, variantId) =>
+  data(api.post("/shop/wishlist/", {
+    product_id: productId,
+    ...(variantId != null ? { variant_id: variantId } : {}),
+  }));
 export const removeWishlistItem = (id) =>
   data(api.delete(`/shop/wishlist/${id}/`));

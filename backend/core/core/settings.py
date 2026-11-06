@@ -16,6 +16,26 @@ for dotenv_path in (
 ):
     load_dotenv(dotenv_path)
 
+
+def env_bool(name, default):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ImproperlyConfigured(f"{name} must be a boolean value.")
+
+
+def env_list(name, default=()):
+    value = os.getenv(name)
+    if value is None:
+        return list(default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 TESTING=len(sys.argv)>1 and sys.argv[1]=='test'
 ADMIN_EMAIL=os.getenv("ADMIN_EMAIL","").strip()
 ADMIN_PASSWORD=os.getenv("ADMIN_PASSWORD","")
@@ -24,13 +44,40 @@ ADMIN_FIRST_NAME=os.getenv("ADMIN_FIRST_NAME","Admin")
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-1fg$89$%#6nbc*d(#*t%+y)%xj!vkaki%%j+^3wnw55qqr6)i+'
-
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env_bool("DEBUG", TESTING)
 
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ImproperlyConfigured("SECRET_KEY must be set when DEBUG is False.")
+    SECRET_KEY = "django-insecure-1fg$89$%#6nbc*d(#*t%+y)%xj!vkaki%%j+^3wnw55qqr6)i+"
+
+ALLOWED_HOSTS = env_list(
+    "ALLOWED_HOSTS",
+    ("localhost", "127.0.0.1") if DEBUG else (),
+)
+if not DEBUG and (not ALLOWED_HOSTS or "*" in ALLOWED_HOSTS):
+    raise ImproperlyConfigured(
+        "Set ALLOWED_HOSTS to the production API hostnames; wildcard hosts are not allowed."
+    )
+
+SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", not DEBUG)
+SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", not DEBUG)
+CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", not DEBUG)
+try:
+    SECURE_HSTS_SECONDS = int(
+        os.getenv("SECURE_HSTS_SECONDS", "0" if DEBUG else "300")
+    )
+except ValueError as error:
+    raise ImproperlyConfigured("SECURE_HSTS_SECONDS must be an integer.") from error
+# These require every subdomain to support HTTPS and are intentionally opt-in.
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", False)
+SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", False)
+if env_bool("USE_X_FORWARDED_PROTO", not DEBUG):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = "DENY"
 
 
 # Application definition
@@ -167,7 +214,8 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
 
 
@@ -191,16 +239,23 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': True,
 }
 
-CORS_ALLOWED_ORIGINS=[
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://localhost:5175",
-    "http://localhost:3000",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174",
-    "http://127.0.0.1:5175",
-    "http://127.0.0.1:3000",
-]
+CORS_ALLOWED_ORIGINS = env_list(
+    "CORS_ALLOWED_ORIGINS",
+    (
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
+        "http://127.0.0.1:3000",
+    ) if DEBUG else (),
+)
+CSRF_TRUSTED_ORIGINS = env_list(
+    "CSRF_TRUSTED_ORIGINS",
+    CORS_ALLOWED_ORIGINS if DEBUG else (),
+)
 
 CORS_ALLOW_CREDENTIALS=True
 
@@ -210,11 +265,13 @@ AUTHENTICATION_BACKENDS={
 
 EMAIL_HOST = os.getenv("EMAIL_HOST", "")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT") or "587")
-EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "Aurevo <no-reply@aurevo.local>")
-EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "")
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend"
+).strip() or "django.core.mail.backends.smtp.EmailBackend"
 
 OTP_EXPIRY_MINUTES=2
 OTP_MAX_ATTEMPTS=5

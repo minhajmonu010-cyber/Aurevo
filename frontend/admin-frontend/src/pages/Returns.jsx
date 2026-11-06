@@ -90,8 +90,8 @@ export default function Returns() {
         allReturns.push(...data.results);
       }
       downloadCsv("returns.csv", [
-        ["Order", "Customer", "Email", "Reason", "Refund amount", "Requested on", "Status"],
-        ...allReturns.map((item) => [item.order_number, item.customer_name, item.customer_email, item.reason, item.refund_amount, item.created_at, item.status]),
+        ["Order", "Product", "SKU", "Size", "Color", "Quantity", "Customer", "Email", "Reason", "Refund amount", "Requested on", "Status"],
+        ...allReturns.map((item) => [item.order_number, item.item_product_name, item.item_sku, item.item_size, item.item_color, item.item_quantity, item.customer_name, item.customer_email, item.reason, item.refund_amount, item.created_at, item.status]),
       ]);
     } catch (err) {
       setError(err?.response?.data?.detail || "Unable to export return requests.");
@@ -178,6 +178,7 @@ export default function Returns() {
               <thead>
                 <tr>
                   <th>Order</th>
+                  <th>Product</th>
                   <th>Customer</th>
                   <th>Reason</th>
                   <th>Refund amount</th>
@@ -191,6 +192,14 @@ export default function Returns() {
                 {returns.map((item) => (
                   <tr key={item.id}>
                     <td><span className="ad-order-id">#{item.order_number || item.order}</span></td>
+                    <td>
+                      <b>{item.item_product_name || "Legacy whole-order return"}</b>
+                      {item.item_product_name && (
+                        <span className="ad-cell-sub">
+                          {[item.item_sku, item.item_size, item.item_color, item.item_quantity ? `Qty ${item.item_quantity}` : ""].filter(Boolean).join(" · ")}
+                        </span>
+                      )}
+                    </td>
                     <td>
                       <div className="ad-cell">
                         <span className="ad-initials">{initials(item.customer_name || "Customer")}</span>
@@ -236,6 +245,7 @@ export default function Returns() {
           {actionError && <ErrorNote error={{ response: { data: { detail: actionError } } }} />}
           <dl className="admin-return-details">
             <div><dt>Customer</dt><dd>{selectedReturn.customer_name || "Customer"}{selectedReturn.customer_email && <small>{selectedReturn.customer_email}</small>}</dd></div>
+            <div><dt>Product</dt><dd>{selectedReturn.item_product_name || "Legacy whole-order return"}{selectedReturn.item_product_name && <small>{[selectedReturn.item_sku, selectedReturn.item_size, selectedReturn.item_color, selectedReturn.item_quantity ? `Quantity ${selectedReturn.item_quantity}` : ""].filter(Boolean).join(" · ")}</small>}</dd></div>
             <div><dt>Requested refund</dt><dd><b>{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(Number(selectedReturn.refund_amount || 0))}</b></dd></div>
             <div><dt>Requested</dt><dd>{formatWhen(selectedReturn.created_at)}</dd></div>
             <div><dt>Status</dt><dd><Pill tone={STATUS_TONE[selectedReturn.status] || "muted"}>{selectedReturn.status}</Pill></dd></div>

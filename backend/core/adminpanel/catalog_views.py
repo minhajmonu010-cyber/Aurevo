@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.db.models import Avg, Count, Exists, F, IntegerField, OuterRef, Q, Subquery, Sum
+from django.db.models import Avg, Count, Exists, F, IntegerField, Max, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -75,14 +75,19 @@ class AdminCategoryViewSet(AdminBase, viewsets.ModelViewSet):
             queryset = queryset.order_by(*self.SORTS.get(params.get("sort"), self.SORTS["priority"]))
         return queryset
 
+    def _category_share_data(self):
+        if not hasattr(self, "_category_share_data_cache"):
+            self._category_share_data_cache = category_shares()
+        return self._category_share_data_cache
+
     def get_serializer_context(self):
         context = super().get_serializer_context()
-        context["shares"] = category_shares()[1]
+        context["shares"] = self._category_share_data()[1]
         return context
 
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)
-        response.data["share_basis"] = category_shares()[0]  # "sales" or, while nothing was sold, "products"
+        response.data["share_basis"] = self._category_share_data()[0]
         return response
 
     @action(detail=False, methods=["get"])
@@ -160,16 +165,41 @@ class AdminProductViewSet(AdminBase, viewsets.ModelViewSet):
     def get_queryset(self):
         params = self.request.query_params
         variants = ProductVariant.objects.filter(product=OuterRef("pk"))
+        queryset = Product.objects.select_related("category", "brand")
+        if self.action == "list":
+            queryset = queryset.prefetch_related("images")
+        else:
+            queryset = queryset.prefetch_related("variants", "images")
         queryset = (
-            Product.objects.select_related("category", "brand")
-            .prefetch_related("variants", "images")
+            queryset
             .annotate(
                 stock_total=Coalesce(
                     Subquery(variants.values("product").annotate(n=Sum("stock")).values("n"), output_field=IntegerField()), 0
                 ),
                 min_price_db=Subquery(variants.order_by("price").values("price")[:1]),
+                max_price_db=Subquery(
+                    variants.order_by().values("product").annotate(value=Max("price")).values("value")[:1]
+                ),
+                variant_count_db=Coalesce(
+                    Subquery(variants.order_by().values("product").annotate(value=Count("id")).values("value")[:1]),
+                    0,
+                ),
                 has_variants=Exists(variants),
                 has_low=Exists(variants.filter(is_active=True, stock__lte=OuterRef("low_stock_threshold"))),
+                active_variant_count=Coalesce(
+                    Subquery(
+                        variants.filter(is_active=True).order_by().values("product")
+                        .annotate(value=Count("id")).values("value")[:1]
+                    ),
+                    0,
+                ),
+                active_stock_total=Coalesce(
+                    Subquery(
+                        variants.filter(is_active=True).order_by().values("product")
+                        .annotate(value=Sum("stock")).values("value")[:1]
+                    ),
+                    0,
+                ),
             )
         )
 
@@ -198,14 +228,29 @@ class AdminProductViewSet(AdminBase, viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"])
     def stats(self, request):
-        products = self.get_queryset().model.objects.all()
-        low = products.filter(variants__is_active=True, variants__stock__lte=F("low_stock_threshold")).distinct().count()
-        average = ProductVariant.objects.filter(is_active=True).aggregate(a=Avg("price"))["a"]
+        stats = Product.objects.aggregate(
+            total=Count("id", distinct=True),
+            active=Count("id", filter=Q(is_active=True), distinct=True),
+            hidden=Count("id", filter=Q(is_active=False), distinct=True),
+            low_stock=Count(
+                "id",
+                filter=Q(
+                    variants__is_active=True,
+                    variants__stock__lte=F("low_stock_threshold"),
+                ),
+                distinct=True,
+            ),
+            average_price=Avg(
+                "variants__price",
+                filter=Q(variants__is_active=True),
+            ),
+        )
+        average = stats["average_price"]
         return Response({
-            "total": products.count(),
-            "active": products.filter(is_active=True).count(),
-            "hidden": products.filter(is_active=False).count(),
-            "low_stock": low,
+            "total": stats["total"],
+            "active": stats["active"],
+            "hidden": stats["hidden"],
+            "low_stock": stats["low_stock"],
             "average_price": f"{average:.2f}" if average is not None else None,
         })
 

@@ -8,6 +8,13 @@ from .models import Coupon
 class AdminCouponSerializer(serializers.ModelSerializer):
     status = serializers.SerializerMethodField()
     discount_value = StrictDecimalField(max_digits=10, decimal_places=2, min_value=Decimal("0.01"))
+    max_discount_amount = StrictDecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=Decimal("0.01"),
+        allow_null=True,
+        required=False,
+    )
     minimum_order_amount = StrictDecimalField(
         max_digits=10,
         decimal_places=2,
@@ -25,6 +32,7 @@ class AdminCouponSerializer(serializers.ModelSerializer):
             "description",
             "discount_type",
             "discount_value",
+            "max_discount_amount",
             "minimum_order_amount",
             "usage_limit",
             "used_count",
@@ -68,6 +76,10 @@ class AdminCouponSerializer(serializers.ModelSerializer):
             "discount_value",
             getattr(self.instance, "discount_value", None),
         )
+        max_discount_amount = attrs.get(
+            "max_discount_amount",
+            getattr(self.instance, "max_discount_amount", None),
+        )
         start_date = attrs.get(
             "start_date",
             getattr(self.instance, "start_date", None),
@@ -87,6 +99,10 @@ class AdminCouponSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     "discount_value": "Percentage cannot exceed 100."
                 })
+        elif max_discount_amount is not None:
+            raise serializers.ValidationError({
+                "max_discount_amount": "Maximum discount amount is only available for percentage coupons."
+            })
 
         return attrs
 

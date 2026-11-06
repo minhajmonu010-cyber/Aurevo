@@ -59,6 +59,18 @@ const POSTAL_CODE_PATTERNS = {
   "South Africa": /^\d{4}$/,
 };
 
+const ADDRESS_FIELD_NAMES = [
+  "full_name",
+  "phone",
+  "address_line1",
+  "address_line2",
+  "city",
+  "district",
+  "state",
+  "postal_code",
+  "country",
+];
+
 function getPostalCodeError(value, country) {
   const postalCode = value.trim().toUpperCase();
   if (!postalCode) return "Enter a postal code.";
@@ -69,6 +81,25 @@ function getPostalCodeError(value, country) {
     : /^(?=.*\d)[A-Z0-9](?:[A-Z0-9 -]{1,10}[A-Z0-9])$/.test(postalCode);
 
   return isValid ? "" : `Check the postal code format for ${country}.`;
+}
+
+function isAddressFieldValid(name, value, country) {
+  const cleaned = value.trim();
+  switch (name) {
+    case "full_name":
+    case "address_line1":
+    case "city":
+    case "district":
+    case "state":
+    case "country":
+      return Boolean(cleaned);
+    case "phone":
+      return /^\+?[0-9]{10,15}$/.test(cleaned.replace(/[\s\-()]/g, ""));
+    case "postal_code":
+      return !getPostalCodeError(value, country);
+    default:
+      return true;
+  }
 }
 
 const emptyAddress = {
@@ -94,6 +125,7 @@ export default function Address() {
   const [deletingId, setDeletingId] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [postalCodeError, setPostalCodeError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({});
   const [districtLookupResult, setDistrictLookupResult] = useState(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -177,6 +209,7 @@ export default function Address() {
 
   function handleChange(event) {
     const { name, value, checked, type } = event.target;
+    const nextCountry = name === "country" ? value : form.country;
 
     setForm((previous) => ({
       ...previous,
@@ -185,10 +218,25 @@ export default function Address() {
     }));
 
     if (name === "postal_code" && postalCodeError) {
-      setPostalCodeError(getPostalCodeError(value, form.country));
-    } else if (name === "country") {
-      setPostalCodeError("");
+      setPostalCodeError(getPostalCodeError(value, nextCountry));
+    } else if (name === "country" && postalCodeError) {
+      setPostalCodeError(getPostalCodeError(form.postal_code, nextCountry));
     }
+
+    setFieldErrors((previous) => {
+      const next = { ...previous };
+      if (ADDRESS_FIELD_NAMES.includes(name) && isAddressFieldValid(name, value, nextCountry)) {
+        delete next[name];
+      }
+      if (
+        name === "country" &&
+        previous.postal_code &&
+        isAddressFieldValid("postal_code", form.postal_code, nextCountry)
+      ) {
+        delete next.postal_code;
+      }
+      return next;
+    });
 
   }
 
@@ -209,6 +257,7 @@ export default function Address() {
     });
     setNotice("");
     setError("");
+    setFieldErrors({});
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -216,6 +265,7 @@ export default function Address() {
     setEditingId(null);
     setForm(emptyAddress);
     setError("");
+    setFieldErrors({});
   }
 
   async function handleSubmit(event) {
@@ -227,6 +277,7 @@ export default function Address() {
     }
 
     setPostalCodeError("");
+    setFieldErrors({});
     setSaving(true);
     setError("");
     setNotice("");
@@ -245,12 +296,22 @@ export default function Address() {
       await loadAddresses();
     } catch (err) {
       const data = err.response?.data;
+      const nextFieldErrors = Object.fromEntries(
+        ADDRESS_FIELD_NAMES
+          .filter((name) => data?.[name])
+          .map((name) => [name, Array.isArray(data[name]) ? data[name][0] : data[name]])
+      );
+      if (Object.keys(nextFieldErrors).length) {
+        setFieldErrors(nextFieldErrors);
+      }
       const message =
         data && typeof data === "object"
           ? Object.values(data).flat().join(" ")
           : "Unable to save the address. Please try again.";
 
-      setError(message);
+      const hasOtherErrors = data && typeof data === "object" &&
+        Object.keys(data).some((name) => !ADDRESS_FIELD_NAMES.includes(name));
+      setError(hasOtherErrors || !Object.keys(nextFieldErrors).length ? message : "");
     } finally {
       setSaving(false);
     }
@@ -388,7 +449,9 @@ export default function Address() {
                 onChange={handleChange}
                 maxLength={150}
                 required
+                aria-invalid={Boolean(fieldErrors.full_name)}
               />
+              {fieldErrors.full_name && <span className="address-field-error" role="alert">{fieldErrors.full_name}</span>}
             </label>
 
             <label>
@@ -400,7 +463,9 @@ export default function Address() {
                 onChange={handleChange}
                 maxLength={20}
                 required
+                aria-invalid={Boolean(fieldErrors.phone)}
               />
+              {fieldErrors.phone && <span className="address-field-error" role="alert">{fieldErrors.phone}</span>}
             </label>
 
             <label>
@@ -411,7 +476,9 @@ export default function Address() {
                 onChange={handleChange}
                 maxLength={255}
                 required
+                aria-invalid={Boolean(fieldErrors.address_line1)}
               />
+              {fieldErrors.address_line1 && <span className="address-field-error" role="alert">{fieldErrors.address_line1}</span>}
             </label>
 
             <label>
@@ -433,7 +500,9 @@ export default function Address() {
                   onChange={handleChange}
                   maxLength={100}
                   required
+                  aria-invalid={Boolean(fieldErrors.city)}
                 />
+                {fieldErrors.city && <span className="address-field-error" role="alert">{fieldErrors.city}</span>}
               </label>
 
               <label>
@@ -444,7 +513,9 @@ export default function Address() {
                   onChange={handleChange}
                   maxLength={100}
                   required
+                  aria-invalid={Boolean(fieldErrors.district)}
                 />
+                {fieldErrors.district && <span className="address-field-error" role="alert">{fieldErrors.district}</span>}
                 {districtLookupStatus && (
                   <span className="address-field-hint" role="status">
                     {districtLookupStatus}
@@ -462,7 +533,9 @@ export default function Address() {
                   onChange={handleChange}
                   maxLength={100}
                   required
+                  aria-invalid={Boolean(fieldErrors.state)}
                 />
+                {fieldErrors.state && <span className="address-field-error" role="alert">{fieldErrors.state}</span>}
               </label>
 
               <label>
@@ -472,14 +545,14 @@ export default function Address() {
                   value={form.postal_code}
                   onChange={handleChange}
                   onBlur={() => setPostalCodeError(getPostalCodeError(form.postal_code, form.country))}
-                  aria-invalid={Boolean(postalCodeError)}
+                  aria-invalid={Boolean(postalCodeError || fieldErrors.postal_code)}
                   aria-describedby={postalCodeError ? "postal-code-error" : undefined}
                   maxLength={12}
                   required
                 />
-                {postalCodeError && (
+                {(postalCodeError || fieldErrors.postal_code) && (
                   <span className="address-field-error" id="postal-code-error" role="alert">
-                    {postalCodeError}
+                    {postalCodeError || fieldErrors.postal_code}
                   </span>
                 )}
               </label>
@@ -492,6 +565,7 @@ export default function Address() {
                 value={form.country}
                 onChange={handleChange}
                 required
+                aria-invalid={Boolean(fieldErrors.country)}
               >
                 {!COUNTRIES.includes(form.country) && form.country && (
                   <option value={form.country}>{form.country}</option>
@@ -500,6 +574,7 @@ export default function Address() {
                   <option key={country} value={country}>{country}</option>
                 ))}
               </select>
+              {fieldErrors.country && <span className="address-field-error" role="alert">{fieldErrors.country}</span>}
             </label>
 
             <label>

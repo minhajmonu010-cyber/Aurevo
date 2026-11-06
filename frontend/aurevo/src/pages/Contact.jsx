@@ -1,6 +1,7 @@
 import { useState } from "react";
 import api from "../api/axios";
 import Icon from "../Components/Icon";
+import { isEmail } from "../utils/validators";
 import SiteHeader from "../Components/SiteHeader";
 import "../styles/contact.css";
 
@@ -46,6 +47,13 @@ export default function Contact() {
     type: "",
     message: "",
   });
+  const [fieldErrors, setFieldErrors] = useState({});
+
+  function isContactFieldValid(name, value) {
+    if (name === "email") return isEmail(value);
+    if (name === "message") return value.trim().length >= 10;
+    return Boolean(value.trim());
+  }
 
   function handleChange(event) {
     const { name, value } = event.target;
@@ -54,17 +62,19 @@ export default function Contact() {
       ...previous,
       [name]: value,
     }));
+
+    if (isContactFieldValid(name, value)) {
+      setFieldErrors((previous) => ({ ...previous, [name]: undefined }));
+    }
   }
 
   async function handleSubmit(event) {
     event.preventDefault();
     setStatus({ type: "", message: "" });
+    setFieldErrors({});
 
     if (form.message.trim().length < 10) {
-      setStatus({
-        type: "error",
-        message: "Please enter at least 10 characters in your message.",
-      });
+      setFieldErrors({ message: "Please enter at least 10 characters in your message." });
       return;
     }
 
@@ -85,20 +95,24 @@ export default function Contact() {
       });
     } catch (error) {
       const data = error.response?.data;
+      const recognizedFields = ["name", "email", "subject", "message"];
+      const nextFieldErrors = Object.fromEntries(
+        recognizedFields
+          .filter((name) => data?.[name])
+          .map((name) => [name, Array.isArray(data[name]) ? data[name][0] : data[name]])
+      );
+      if (Object.keys(nextFieldErrors).length) setFieldErrors(nextFieldErrors);
       let message = "Unable to send your message. Please try again.";
 
       if (data && typeof data === "object") {
         message =
           data.detail ||
           data.message ||
-          Object.values(data).flat().join(" ") ||
+          (Object.keys(nextFieldErrors).length === 0 && Object.values(data).flat().join(" ")) ||
           message;
       }
 
-      setStatus({
-        type: "error",
-        message,
-      });
+      if (Object.keys(nextFieldErrors).length === 0) setStatus({ type: "error", message });
     } finally {
       setLoading(false);
     }
@@ -203,7 +217,9 @@ export default function Contact() {
                 maxLength={100}
                 autoComplete="name"
                 required
+                aria-invalid={Boolean(fieldErrors.name)}
               />
+              {fieldErrors.name && <span className="field-error" role="alert">{fieldErrors.name}</span>}
             </label>
 
             <label>
@@ -216,7 +232,9 @@ export default function Contact() {
                 placeholder="you@example.com"
                 autoComplete="email"
                 required
+                aria-invalid={Boolean(fieldErrors.email)}
               />
+              {fieldErrors.email && <span className="field-error" role="alert">{fieldErrors.email}</span>}
             </label>
           </div>
 
@@ -230,7 +248,9 @@ export default function Contact() {
               placeholder="What can we help you with?"
               maxLength={150}
               required
+              aria-invalid={Boolean(fieldErrors.subject)}
             />
+            {fieldErrors.subject && <span className="field-error" role="alert">{fieldErrors.subject}</span>}
           </label>
 
           <label>
@@ -243,7 +263,9 @@ export default function Contact() {
               rows={6}
               minLength={10}
               required
+              aria-invalid={Boolean(fieldErrors.message)}
             />
+            {fieldErrors.message && <span className="field-error" role="alert">{fieldErrors.message}</span>}
           </label>
 
           {status.message && (

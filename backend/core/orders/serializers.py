@@ -3,7 +3,8 @@ from django.conf import settings
 from rest_framework import serializers
 from catalog.models import Review
 
-from .models import Order, OrderItem, Payment, OrderStatusHistory
+from .models import Order, OrderItem, OrderReturn, OrderStatusHistory, Payment
+from .returns import calculate_item_return_refund
 from core.validation import StrictIntegerField
 
 
@@ -11,6 +12,11 @@ class OrderItemSerializer(serializers.ModelSerializer):
     image = serializers.SerializerMethodField()
     product_id = serializers.SerializerMethodField()
     reviewed = serializers.SerializerMethodField()
+    can_cancel = serializers.SerializerMethodField()
+    can_return = serializers.SerializerMethodField()
+    return_status = serializers.SerializerMethodField()
+    return_reason = serializers.SerializerMethodField()
+    return_refund_amount = serializers.SerializerMethodField()
 
     class Meta:
         model = OrderItem
@@ -18,6 +24,13 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "id",
             "product_id",
             "reviewed",
+            "is_cancelled",
+            "cancelled_at",
+            "can_cancel",
+            "can_return",
+            "return_status",
+            "return_reason",
+            "return_refund_amount",
             "product_name",
             "image",
             "sku",
@@ -46,6 +59,56 @@ class OrderItemSerializer(serializers.ModelSerializer):
     def get_product_id(self, obj):
         return obj.variant.product_id if obj.variant_id else None
 
+    def get_can_cancel(self, obj):
+        order = obj.order
+        if obj.is_cancelled or order.order_status not in {Order.PENDING, Order.PROCESSING}:
+            return False
+        prefetch_cache = getattr(order, "_prefetched_objects_cache", None)
+        if prefetch_cache is None:
+            order._prefetched_objects_cache = {}
+            prefetch_cache = order._prefetched_objects_cache
+        payments = prefetch_cache.get("payments")
+        if payments is None:
+            payments = list(order.payments.all())
+            prefetch_cache["payments"] = payments
+        return not any(
+            payment.payment_status == Payment.REFUND_PENDING
+            or (
+                payment.payment_status == Payment.PENDING
+                and payment.payment_method in {"upi", "card", "razorpay"}
+            )
+            for payment in payments
+        )
+
+    def get_can_return(self, obj):
+        if obj.is_cancelled or obj.order.order_status != Order.DELIVERED:
+            return False
+        return not any(
+            return_request.status in {
+                OrderReturn.REQUESTED,
+                OrderReturn.APPROVED,
+            }
+            for return_request in obj.return_requests.all()
+        )
+
+    def _latest_return_request(self, obj):
+        requests = obj.return_requests.all()
+        return requests[0] if requests else None
+
+    def get_return_status(self, obj):
+        return_request = self._latest_return_request(obj)
+        return return_request.status if return_request else ""
+
+    def get_return_reason(self, obj):
+        return_request = self._latest_return_request(obj)
+        return return_request.reason if return_request else ""
+
+    def get_return_refund_amount(self, obj):
+        return_request = self._latest_return_request(obj)
+        if return_request and return_request.status != OrderReturn.REJECTED:
+            return return_request.refund_amount
+        return calculate_item_return_refund(obj.order, obj)
+
     def get_reviewed(self, obj):
         product_id = self.get_product_id(obj)
         request = self.context.get("request")
@@ -70,6 +133,8 @@ class PaymentSerializer(serializers.ModelSerializer):
             "amount",
             "transaction_id",
             "payment_status",
+            "refunded_amount",
+            "refund_id",
             "paid_at",
             "created_at",
         ]

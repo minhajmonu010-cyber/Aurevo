@@ -96,6 +96,16 @@ export const updateAdminOrderStatus = async (orderId, update) => {
 
   return response.data;
 };
+export const checkAdminOrderRefundStatus = async (orderId) => {
+  const response = await api.post(`/admin/auth/orders/${orderId}/refund-status/`);
+  return response.data;
+};
+
+export const creditAdminOrderRefundToWallet = async (orderId) => {
+  const response = await api.post(`/admin/auth/orders/${orderId}/wallet-refund/`);
+  return response.data;
+};
+
 // src/api/admin.js
 
 export const getAdminCustomers = async (params = {}) => {

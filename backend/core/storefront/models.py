@@ -43,6 +43,13 @@ class WishlistItem(models.Model):
         on_delete=models.CASCADE,
         related_name="wishlist_items",
     )
+    variant = models.ForeignKey(
+        "catalog.ProductVariant",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="wishlist_items",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -19,7 +19,23 @@ export default function ResetPassword() {
 
   if (!email || !otp) return <Navigate to="/forgot-password" replace />;
 
-  const update = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
+  const update = (e) => {
+    const { name, value } = e.target;
+    const nextForm = { ...form, [name]: value };
+    setForm(nextForm);
+    setErrors((current) => {
+      const next = { ...current };
+      if (name === "new_password") {
+        if (!passwordProblem(value)) next.new_password = undefined;
+        if (nextForm.confirm_password === value) next.confirm_password = undefined;
+      }
+      if (name === "confirm_password" && value === nextForm.new_password) {
+        next.confirm_password = undefined;
+      }
+      return next;
+    });
+    setFormError("");
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();

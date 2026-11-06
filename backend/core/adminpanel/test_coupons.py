@@ -52,6 +52,7 @@ class CouponAdminSummaryTests(APITestCase):
                 "description": "New customer discount",
                 "discount_type": "percentage",
                 "discount_value": "20.00",
+                "max_discount_amount": "150.00",
                 "minimum_order_amount": "500.00",
                 "usage_limit": 25,
                 "start_date": now.isoformat(),
@@ -64,6 +65,25 @@ class CouponAdminSummaryTests(APITestCase):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data["code"], "NEW-CUSTOMER20")
         self.assertEqual(response.data["status"], "Active")
+        self.assertEqual(response.data["max_discount_amount"], "150.00")
+
+    def test_maximum_discount_amount_is_only_valid_for_percentage_coupons(self):
+        now = timezone.now()
+        response = self.client.post(
+            "/api/admin/auth/coupons/",
+            {
+                "code": "FIXED-WITH-CAP",
+                "discount_type": "fixed",
+                "discount_value": "10.00",
+                "max_discount_amount": "50.00",
+                "start_date": now.isoformat(),
+                "end_date": (now + timedelta(days=1)).isoformat(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("max_discount_amount", response.data)
 
     def test_coupon_rejects_invalid_limits_and_boolean_amounts(self):
         now = timezone.now()

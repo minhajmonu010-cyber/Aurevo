@@ -2,6 +2,7 @@ import io
 import shutil
 import tempfile
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.core.cache import cache
 from django.core.files.storage import default_storage
@@ -12,6 +13,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from account.models import User
+from adminpanel.analytics import category_shares
 from catalog.models import Brand, Category, InventoryLog, Product, ProductImage, ProductVariant
 from orders.models import Order, OrderItem
 
@@ -160,6 +162,16 @@ class CategoryAdminTests(CatalogAdminBase):
         self.assertEqual(by_name["Streetwear"]["product_count"], 3)
         self.assertEqual(by_name["Streetwear"]["share"], 75)  # no sales yet: share of the products
         self.assertEqual(by_name["Linen"]["share"], 25)
+
+    def test_category_shares_are_calculated_once_per_list_request(self):
+        with patch(
+            "adminpanel.catalog_views.category_shares",
+            wraps=category_shares,
+        ) as calculate_shares:
+            response = self.client.get(f"{BASE}/categories/")
+
+        self.assertEqual(response.status_code, 200)
+        calculate_shares.assert_called_once_with()
 
     def test_stats(self):
         a, b = self.category("A", is_featured=True), self.category("B", is_active=False)
@@ -397,10 +409,33 @@ class ProductAdminTests(CatalogAdminBase):
         self.assertEqual(row["Pricey Coat"]["sku"], "P1")
         self.assertEqual(self.client.get(f"{BASE}/products/").data["count"], 4)
 
+    def test_product_list_query_count_does_not_scale_with_variant_count(self):
+        product = self.product(
+            self.cat,
+            name="Many variants",
+            sku="MANY",
+            prices=(1000, 1100, 1200, 1300),
+        )
+        ProductImage.objects.create(product=product, image=picture("many.png"), is_primary=True)
+        self.client.force_authenticate(user=self.admin)
+
+        with self.assertNumQueries(3):
+            response = self.client.get(f"{BASE}/products/?page_size=100")
+
+        self.assertEqual(response.status_code, 200)
+        row = next(item for item in response.data["results"] if item["id"] == product.id)
+        self.assertEqual(
+            (row["min_price"], row["max_price"], row["total_stock"], row["variant_count"], row["stock_status"]),
+            ("1000.00", "1300.00", 80, 4, "ok"),
+        )
+
     def test_stats(self):
         self.product(self.cat, name="A", sku="A1", prices=(1000,), stock=50)
         self.product(self.cat, name="B", sku="B1", prices=(2000,), stock=2, is_active=False)
-        stats = self.client.get(f"{BASE}/products/stats/").data
+        self.client.force_authenticate(user=self.admin)
+        with self.assertNumQueries(1):
+            response = self.client.get(f"{BASE}/products/stats/")
+        stats = response.data
         self.assertEqual((stats["total"], stats["active"], stats["hidden"], stats["low_stock"]), (2, 1, 1, 1))
         self.assertEqual(stats["average_price"], "1500.00")
 
@@ -463,3 +498,38 @@ class ProductAdminTests(CatalogAdminBase):
         self.assertNotEqual(first_page.data["results"][0]["id"], second_page.data["results"][0]["id"])
         self.assertEqual(first_page.data["summary"]["variant_count"], 2)
         self.assertEqual(first_page.data["summary"]["stock_units"], 24)
+
+    def test_inventory_alerts_filter_returns_only_low_and_out_of_stock_variants(self):
+        self.product(self.cat, name="Low stock", sku="LOW1", stock=2, low_stock_threshold=5)
+        self.product(self.cat, name="Out of stock", sku="OUT1", stock=0)
+        self.product(self.cat, name="Healthy stock", sku="OK1", stock=12)
+
+        response = self.client.get(
+            "/api/admin/auth/inventory/?status=alerts&page=1&page_size=12"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            {row["status"] for row in response.data["results"]},
+            {"low", "out"},
+        )
+        self.assertEqual(response.data["count"], 2)
+
+    def test_inventory_query_count_is_bounded_and_summary_is_database_aggregated(self):
+        for index in range(5):
+            self.product(
+                self.cat,
+                name=f"Inventory batch {index}",
+                sku=f"IB{index}",
+                prices=(1000, 1100, 1200),
+                stock=8,
+            )
+        self.client.force_authenticate(user=self.admin)
+
+        with self.assertNumQueries(3):
+            response = self.client.get("/api/admin/auth/inventory/?page=1&page_size=2")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["results"]), 2)
+        self.assertEqual(response.data["count"], 15)
+        self.assertEqual(response.data["summary"]["stock_units"], 120)

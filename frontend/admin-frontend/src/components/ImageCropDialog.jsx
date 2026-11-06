@@ -87,7 +87,10 @@ export default function ImageCropDialog({ file, onCancel, onComplete }) {
           <ReactCrop
             crop={crop}
             onChange={(_, percentCrop) => setCrop(percentCrop)}
-            onComplete={(pixelCrop) => setCompletedCrop(pixelCrop)}
+            onComplete={(pixelCrop) => {
+              setCompletedCrop(pixelCrop);
+              if (pixelCrop.width && pixelCrop.height) setError("");
+            }}
             ruleOfThirds
           >
             <img ref={imageRef} src={source} alt="Choose the area to crop" onLoad={onImageLoad} />

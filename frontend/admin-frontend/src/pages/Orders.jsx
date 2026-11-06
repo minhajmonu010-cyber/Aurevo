@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getAdminOrder, getAdminOrders, updateAdminOrderStatus } from "../api/admin";
+import {
+  checkAdminOrderRefundStatus,
+  creditAdminOrderRefundToWallet,
+  getAdminOrder,
+  getAdminOrders,
+  updateAdminOrderStatus,
+} from "../api/admin";
 import { useSearchParams } from "react-router-dom";
+import ConfirmationDialog from "../components/ConfirmationDialog";
 import Icon from "../components/Icon";
 import { EmptyState, ErrorNote, Modal, Pagination, Pill, Skeleton, StatCard } from "../components/ui";
 import { useToast } from "../context/ToastContext";
@@ -16,9 +23,9 @@ const STATUSES = [
   ["cancelled", "Cancelled"],
   ["returned", "Returned"],
 ];
-const PAYMENT_STATUSES = [["pending", "Pending"], ["paid", "Paid"], ["failed", "Failed"], ["refunded", "Refunded"]];
+const PAYMENT_STATUSES = [["pending", "Pending"], ["paid", "Paid"], ["failed", "Failed"], ["refund_pending", "Refund pending"], ["refunded", "Refunded"]];
 const STATUS_TONE = { pending: "warn", processing: "info", shipped: "purple", delivered: "ok", cancelled: "muted", returned: "bad" };
-const PAYMENT_TONE = { pending: "warn", paid: "ok", failed: "bad", refunded: "muted" };
+const PAYMENT_TONE = { pending: "warn", paid: "ok", failed: "bad", refund_pending: "warn", refunded: "muted" };
 
 function formatPrice(value) {
   return new Intl.NumberFormat("en-IN", {
@@ -29,7 +36,8 @@ function formatPrice(value) {
 }
 
 function statusLabel(status) {
-  return status ? status.charAt(0).toUpperCase() + status.slice(1) : "Unknown";
+  const label = status?.replaceAll("_", " ");
+  return label ? label.charAt(0).toUpperCase() + label.slice(1) : "Unknown";
 }
 
 function addressLines(address) {
@@ -65,6 +73,9 @@ export default function Orders() {
   const [statusDraft, setStatusDraft] = useState("");
   const [trackingDraft, setTrackingDraft] = useState("");
   const [deliveryDraft, setDeliveryDraft] = useState("");
+  const [refundToWallet, setRefundToWallet] = useState(false);
+  const [refundActionLoading, setRefundActionLoading] = useState(false);
+  const [confirmWalletRefund, setConfirmWalletRefund] = useState(false);
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -134,6 +145,7 @@ export default function Orders() {
         setStatusDraft(detail.order_status);
         setTrackingDraft(detail.tracking_id || "");
         setDeliveryDraft(detail.delivery_date || "");
+        setRefundToWallet(false);
       })
       .catch((requestError) => {
         if (active) {
@@ -159,12 +171,14 @@ export default function Orders() {
       setStatusDraft(detail.order_status);
       setTrackingDraft(detail.tracking_id || "");
       setDeliveryDraft(detail.delivery_date || "");
+      setRefundToWallet(false);
     } catch (requestError) {
       setDetailError(requestError.response?.data?.detail || "Could not load order details.");
       setSelectedOrder(order);
       setStatusDraft(order.order_status);
       setTrackingDraft(order.tracking_id || "");
       setDeliveryDraft(order.delivery_date || "");
+      setRefundToWallet(false);
     } finally {
       setDetailLoading(false);
     }
@@ -194,17 +208,66 @@ export default function Orders() {
         status: statusDraft,
         tracking_id: trackingDraft,
         delivery_date: deliveryDraft || null,
+        refund_to_wallet: refundToWallet,
       });
       setSelectedOrder(result.order);
       setStatusDraft(result.order.order_status);
       setTrackingDraft(result.order.tracking_id || "");
       setDeliveryDraft(result.order.delivery_date || "");
-      toast.show("Order updated successfully.", "ok");
+      setRefundToWallet(false);
+      toast.show(
+        result.refund
+          ? `Order cancelled. ${formatPrice(result.refund.amount)} added to the customer's wallet.`
+          : "Order updated successfully.",
+        "ok"
+      );
       setRefresh((value) => value + 1);
     } catch (requestError) {
       setDetailError(requestError.response?.data?.detail || "Could not update the order. Please try again.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const checkRefundStatus = async () => {
+    if (!selectedOrder) return;
+    setRefundActionLoading(true);
+    setDetailError("");
+    try {
+      const result = await checkAdminOrderRefundStatus(selectedOrder.id);
+      setSelectedOrder(await getAdminOrder(selectedOrder.id));
+      setRefresh((value) => value + 1);
+      toast.show(result.message, result.provider_status === "failed" ? "warn" : "ok");
+    } catch (requestError) {
+      setDetailError(requestError.response?.data?.detail || "Could not check the Razorpay refund status.");
+    } finally {
+      setRefundActionLoading(false);
+    }
+  };
+
+  const creditRefundToWallet = async () => {
+    if (!selectedOrder) return;
+    const payment = selectedOrder.payments?.find((entry) =>
+      ["paid", "refund_pending"].includes(entry.payment_status)
+    );
+    if (!payment) return;
+    const amount = Number(payment.amount)
+      - Number(payment.refunded_amount || 0)
+      + Number(payment.pending_refund_amount || 0);
+    if (amount <= 0) return;
+
+    setRefundActionLoading(true);
+    setDetailError("");
+    try {
+      const result = await creditAdminOrderRefundToWallet(selectedOrder.id);
+      setConfirmWalletRefund(false);
+      setSelectedOrder(result.order);
+      toast.show(`${formatPrice(result.refund.amount)} credited to the customer's wallet.`, "ok");
+      setRefresh((value) => value + 1);
+    } catch (requestError) {
+      setDetailError(requestError.response?.data?.detail || "Could not credit the wallet refund.");
+    } finally {
+      setRefundActionLoading(false);
     }
   };
 
@@ -249,6 +312,14 @@ export default function Orders() {
     () => (selectedOrder?.items || []).reduce((total, item) => total + Number(item.quantity || 0), 0),
     [selectedOrder]
   );
+  const walletRefundPayment = selectedOrder?.payments?.find((payment) =>
+    ["paid", "refund_pending"].includes(payment.payment_status)
+  );
+  const walletRefundAmount = walletRefundPayment
+    ? Number(walletRefundPayment.amount)
+      - Number(walletRefundPayment.refunded_amount || 0)
+      + Number(walletRefundPayment.pending_refund_amount || 0)
+    : 0;
 
   return (
     <>
@@ -446,7 +517,19 @@ export default function Orders() {
                 <div className="admin-order-fulfillment-fields">
                   <label className="ad-field">
                     <span className="ad-label">Status</span>
-                    <select className="ad-select" value={statusDraft} onChange={(event) => setStatusDraft(event.target.value)}>
+                    <select
+                      className="ad-select"
+                      value={statusDraft}
+                      onChange={(event) => {
+                        const nextStatus = event.target.value;
+                        setStatusDraft(nextStatus);
+                        setRefundToWallet(
+                          nextStatus === "cancelled"
+                          && selectedOrder.order_status !== "cancelled"
+                          && selectedOrder.payment_status === "paid"
+                        );
+                      }}
+                    >
                       {STATUSES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                     </select>
                   </label>
@@ -459,6 +542,19 @@ export default function Orders() {
                     <input className="ad-input" type="date" value={deliveryDraft} onChange={(event) => setDeliveryDraft(event.target.value)} />
                   </label>
                 </div>
+                {statusDraft === "cancelled"
+                  && selectedOrder.order_status !== "cancelled"
+                  && selectedOrder.payment_status === "paid" && (
+                  <label className="ad-check-row">
+                    <input
+                      type="checkbox"
+                      className="ad-check"
+                      checked={refundToWallet}
+                      onChange={(event) => setRefundToWallet(event.target.checked)}
+                    />
+                    Credit {formatPrice(selectedOrder.total_amount)} to the customer wallet
+                  </label>
+                )}
               </form>
 
               {(selectedOrder.payments || []).length > 0 && (
@@ -472,6 +568,52 @@ export default function Orders() {
                       <span>{payment.created_at ? formatWhen(payment.created_at) : "—"}</span>
                     </div>
                   ))}
+                  {selectedOrder.order_status === "cancelled"
+                    && selectedOrder.payments.some((payment) => payment.payment_status === "refund_pending") && (
+                    <div className="ad-actions" style={{ marginTop: 12 }}>
+                      <p className="ad-hint">
+                        Razorpay is still processing. You can check its status, or credit the wallet immediately.
+                        If both refunds complete, the customer may receive the amount twice.
+                      </p>
+                      <button
+                        type="button"
+                        className="ad-btn"
+                        onClick={checkRefundStatus}
+                        disabled={refundActionLoading}
+                      >
+                        {refundActionLoading ? "Checking..." : "Check Razorpay refund"}
+                      </button>
+                      <button
+                        type="button"
+                        className="ad-btn primary"
+                        onClick={creditRefundToWallet}
+                        disabled={refundActionLoading}
+                      >
+                        {refundActionLoading ? "Refunding..." : "Refund to wallet now"}
+                      </button>
+                    </div>
+                  )}
+                  {selectedOrder.order_status === "cancelled"
+                    && selectedOrder.payments.some((payment) =>
+                      ["paid", "refund_pending"].includes(payment.payment_status)
+                      && Number(payment.amount)
+                        - Number(payment.refunded_amount || 0)
+                        + Number(payment.pending_refund_amount || 0) > 0
+                    )
+                    && !selectedOrder.payments.some((payment) => payment.payment_status === "refund_pending")
+                    && (
+                    <div className="ad-actions" style={{ marginTop: 12 }}>
+                      <p className="ad-hint">The remaining paid amount can be credited immediately.</p>
+                      <button
+                        type="button"
+                        className="ad-btn primary"
+                        onClick={creditRefundToWallet}
+                        disabled={refundActionLoading}
+                      >
+                        {refundActionLoading ? "Refunding..." : "Refund to wallet"}
+                      </button>
+                    </div>
+                  )}
                 </section>
               )}
 
@@ -491,6 +633,30 @@ export default function Orders() {
             </div>
           )}
         </Modal>
+      )}
+      {confirmWalletRefund && selectedOrder && (
+        <ConfirmationDialog
+          title="Refund to customer wallet?"
+          message={`Credit ${formatPrice(walletRefundAmount)} to ${selectedOrder.customer_name}'s wallet now? This cannot be undone.${
+            selectedOrder.payments?.some((payment) => payment.payment_status === "refund_pending")
+              ? " Razorpay is still processing its refund. If it completes later, the customer may receive the amount twice."
+              : ""
+          }`}
+          confirmLabel="Refund to wallet"
+          busyLabel="Refunding..."
+          icon="wallet"
+          tone={undefined}
+          confirmClassName="ad-btn primary"
+          busy={refundActionLoading}
+          error={detailError}
+          onConfirm={creditRefundToWallet}
+          onClose={() => {
+            if (!refundActionLoading) {
+              setConfirmWalletRefund(false);
+              setDetailError("");
+            }
+          }}
+        />
       )}
     </>
   );

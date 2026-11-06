@@ -17,10 +17,12 @@ from account.models import Address
 from adminpanel.models import Coupon
 from catalog.inventory import restore_order_stock
 from catalog.models import InventoryLog, ProductVariant, Review
+from catalog.offer_pricing import offer_prices
 from storefront.models import CartItem
 from wallet.models import Wallet, WalletTransaction
 
 from .models import Order, OrderItem, OrderReturn, OrderStatusHistory, Payment
+from .returns import calculate_item_return_refund
 from .serializers import (
     CustomerCheckoutSerializer,
     CustomerReturnCreateSerializer,
@@ -64,9 +66,111 @@ RAZORPAY_METHODS = ("upi", "card", "razorpay")
 def calculate_coupon_discount(subtotal, coupon):
     if coupon.discount_type == Coupon.PERCENTAGE:
         discount = subtotal * coupon.discount_value / Decimal("100")
+        if coupon.max_discount_amount is not None:
+            discount = min(discount, coupon.max_discount_amount)
     else:
         discount = min(subtotal, coupon.discount_value)
     return discount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+class RefundError(Exception):
+    pass
+
+
+def refund_paid_amount(order, payments, amount, reference):
+    amount = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if amount <= 0:
+        return None
+
+    paid_payments = [
+        payment for payment in payments
+        if payment.payment_status == Payment.PAID
+    ]
+    if not paid_payments:
+        return None
+    if len(paid_payments) != 1:
+        raise RefundError("This order has multiple successful payments. Contact support for a refund.")
+
+    payment = paid_payments[0]
+    refundable = payment.amount - payment.refunded_amount
+    if amount > refundable:
+        raise RefundError("The refund amount exceeds the remaining amount paid.")
+
+    refund_id = ""
+    refund_status = "processed"
+    if payment.payment_method in RAZORPAY_METHODS:
+        if not payment.transaction_id or not razorpay_configured():
+            raise RefundError("Online refund is unavailable. Please contact support.")
+        try:
+            response = requests.post(
+                f"https://api.razorpay.com/v1/payments/{payment.transaction_id}/refund",
+                auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET),
+                json={
+                    "amount": int(amount * 100),
+                    "speed": "normal",
+                    "notes": {
+                        "order_number": order.order_number,
+                        "cancellation": reference,
+                    },
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            refund = response.json()
+        except (requests.RequestException, ValueError):
+            logger.exception(
+                "Razorpay refund request failed for order %s",
+                order.order_number,
+            )
+            raise RefundError("Razorpay could not process the refund. Please try again or contact support.")
+
+        if (
+            not isinstance(refund, dict)
+            or refund.get("status") == "failed"
+            or not refund.get("id")
+        ):
+            logger.error(
+                "Razorpay returned an unsuccessful refund response for order %s",
+                order.order_number,
+            )
+            raise RefundError("Razorpay could not process the refund. Please contact support.")
+        refund_id = refund["id"]
+        refund_status = refund.get("status", "pending")
+    elif payment.payment_method == "wallet":
+        wallet, _ = Wallet.objects.get_or_create(user=order.user)
+        wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
+        wallet.balance += amount
+        wallet.save(update_fields=["balance", "updated_at"])
+        WalletTransaction.objects.create(
+            wallet=wallet,
+            transaction_type=WalletTransaction.CREDIT,
+            amount=amount,
+            description=f"Refund for order {order.order_number}",
+            reference=f"order:{order.order_number}:refund:{reference}",
+        )
+    else:
+        raise RefundError("This payment method cannot be refunded automatically. Please contact support.")
+
+    payment.refunded_amount += amount
+    if payment.refunded_amount >= payment.amount and refund_status == "processed":
+        payment.refunded_amount = payment.amount
+        payment.payment_status = Payment.REFUNDED
+    elif payment.payment_method in RAZORPAY_METHODS and refund_status != "processed":
+        payment.payment_status = Payment.REFUND_PENDING
+        payment.pending_refund_amount = amount
+    else:
+        payment.pending_refund_amount = Decimal("0.00")
+    payment.refund_id = refund_id or payment.refund_id
+    payment.save(update_fields=[
+        "refunded_amount", "pending_refund_amount", "payment_status", "refund_id",
+    ])
+    return {
+        "amount": str(amount),
+        "method": "wallet" if payment.payment_method == "wallet" else "razorpay",
+        "status": payment.payment_status,
+        "refund_id": refund_id,
+        "provider_status": refund_status,
+    }
 
 
 def release_coupon_use(order):
@@ -85,7 +189,12 @@ class CustomerOrderListView(generics.ListAPIView):
     def get_queryset(self):
         return (
             Order.objects.filter(user=self.request.user)
-            .prefetch_related("items__variant__product__images", "payments", "history")
+            .prefetch_related(
+                "items__variant__product__images",
+                "items__return_requests",
+                "payments",
+                "history",
+            )
             .order_by("-created_at", "-id")
         )
 
@@ -98,7 +207,12 @@ class CustomerOrderDetailView(generics.RetrieveAPIView):
     def get_queryset(self):
         return (
             Order.objects.filter(user=self.request.user)
-            .prefetch_related("items__variant__product__images", "payments", "history")
+            .prefetch_related(
+                "items__variant__product__images",
+                "items__return_requests",
+                "payments",
+                "history",
+            )
         )
 
 
@@ -118,26 +232,46 @@ class CustomerOrderCancelView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Only pending orders can be cancelled by the customer.
-        if order.order_status != Order.PENDING:
+        if order.order_status not in {Order.PENDING, Order.PROCESSING}:
             return Response(
                 {
                     "detail": (
-                        "Only pending orders can be cancelled online. "
+                        "Orders can only be cancelled before they are shipped. "
                         "Please contact support for assistance."
                     )
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        payments = list(
+            Payment.objects.select_for_update().filter(order=order)
+        )
+        if any(payment.payment_status == Payment.REFUND_PENDING for payment in payments):
+            return Response(
+                {"detail": "A refund is still processing for this order. Try again after it completes."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        try:
+            refund = refund_paid_amount(
+                order,
+                payments,
+                order.total_amount,
+                "full-order",
+            )
+        except RefundError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_502_BAD_GATEWAY)
+
         restore_order_stock(
             order,
             note=f"Cancelled customer order {order.order_number}",
         )
+        order.items.filter(is_cancelled=False).update(
+            is_cancelled=True,
+            cancelled_at=timezone.now(),
+        )
         release_coupon_use(order)
         Payment.objects.filter(
             order=order,
-            payment_method__in=RAZORPAY_METHODS,
             payment_status=Payment.PENDING,
         ).update(payment_status=Payment.FAILED)
         order.order_status = Order.CANCELLED
@@ -156,20 +290,216 @@ class CustomerOrderCancelView(APIView):
                     "order_number": order.order_number,
                     "order_status": order.order_status,
                 },
+                "refund": refund,
             },
             status=status.HTTP_200_OK,
         )
 
 
-class CustomerOrderReturnView(APIView):
+class CustomerOrderItemCancelView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     @transaction.atomic
-    def post(self, request, pk):
+    def post(self, request, order_id, item_id):
+        order = (
+            Order.objects.select_for_update()
+            .filter(pk=order_id, user=request.user)
+            .first()
+        )
+        if not order:
+            return Response({"detail": "Order not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if order.order_status not in {Order.PENDING, Order.PROCESSING}:
+            return Response(
+                {"detail": "Items can only be cancelled before the order is shipped."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        payments = list(
+            Payment.objects.select_for_update().filter(order=order)
+        )
+        if any(payment.payment_status == Payment.REFUND_PENDING for payment in payments):
+            return Response(
+                {"detail": "A refund is still processing for this order. Try again after it completes."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if any(
+            payment.payment_status == Payment.PENDING
+            and payment.payment_method in RAZORPAY_METHODS
+            for payment in payments
+        ):
+            return Response(
+                {"detail": "Cancel the pending online payment before cancelling individual items."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        paid_payments = [
+            payment for payment in payments
+            if payment.payment_status == Payment.PAID
+        ]
+        if paid_payments and len(paid_payments) != 1:
+            return Response(
+                {"detail": "This order has multiple successful payments. Contact support for cancellation."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        item = (
+            OrderItem.objects.select_for_update()
+            .filter(pk=item_id, order=order)
+            .first()
+        )
+        if not item:
+            return Response({"detail": "Order item not found."}, status=status.HTTP_404_NOT_FOUND)
+        if item.is_cancelled:
+            return Response(
+                {"detail": "This item has already been cancelled."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        active_items = list(
+            order.items.filter(is_cancelled=False).values_list("total_price", flat=True)
+        )
+        original_subtotal = sum(active_items, Decimal("0.00"))
+        remaining_subtotal = original_subtotal - item.total_price
+        refund = None
+
+        if remaining_subtotal <= 0:
+            try:
+                refund = refund_paid_amount(
+                    order,
+                    payments,
+                    order.total_amount,
+                    f"item-{item.pk}",
+                )
+            except RefundError as error:
+                return Response({"detail": str(error)}, status=status.HTTP_502_BAD_GATEWAY)
+
+            now = timezone.now()
+            if item.variant_id:
+                variant = ProductVariant.objects.select_for_update().filter(
+                    pk=item.variant_id
+                ).first()
+                if variant:
+                    variant.stock += item.quantity
+                    variant.save(update_fields=["stock", "updated_at"])
+                    InventoryLog.objects.create(
+                        variant=variant,
+                        type=InventoryLog.IN,
+                        quantity=item.quantity,
+                        note=f"Cancelled order item from {order.order_number}",
+                    )
+            item.is_cancelled = True
+            item.cancelled_at = now
+            item.save(update_fields=["is_cancelled", "cancelled_at"])
+            release_coupon_use(order)
+            Payment.objects.filter(
+                order=order,
+                payment_status=Payment.PENDING,
+            ).update(payment_status=Payment.FAILED)
+            order.order_status = Order.CANCELLED
+            order.save(update_fields=["order_status", "updated_at"])
+            OrderStatusHistory.objects.create(order=order, status=Order.CANCELLED)
+        else:
+            coupon = (
+                Coupon.objects.select_for_update().filter(pk=order.coupon_id).first()
+                if order.coupon_id
+                else None
+            )
+            previous_coupon_discount = order.coupon_discount_amount
+            if coupon and previous_coupon_discount == 0:
+                previous_coupon_discount = min(
+                    calculate_coupon_discount(original_subtotal, coupon),
+                    order.discount_amount,
+                )
+            product_discount = max(
+                order.discount_amount - previous_coupon_discount,
+                Decimal("0.00"),
+            )
+            remaining_product_discount = (
+                product_discount * remaining_subtotal / original_subtotal
+            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+            if coupon and remaining_subtotal < coupon.minimum_order_amount:
+                release_coupon_use(order)
+                order.coupon = None
+                order.coupon_code = ""
+                coupon_discount = Decimal("0.00")
+            elif coupon:
+                coupon_discount = calculate_coupon_discount(remaining_subtotal, coupon)
+            else:
+                coupon_discount = Decimal("0.00")
+
+            new_total = remaining_subtotal - coupon_discount + order.shipping_charge
+            refund_amount = max(order.total_amount - new_total, Decimal("0.00"))
+            try:
+                refund = refund_paid_amount(
+                    order,
+                    payments,
+                    refund_amount,
+                    f"item-{item.pk}",
+                )
+            except RefundError as error:
+                return Response({"detail": str(error)}, status=status.HTTP_502_BAD_GATEWAY)
+
+            now = timezone.now()
+            if item.variant_id:
+                variant = ProductVariant.objects.select_for_update().filter(
+                    pk=item.variant_id
+                ).first()
+                if variant:
+                    variant.stock += item.quantity
+                    variant.save(update_fields=["stock", "updated_at"])
+                    InventoryLog.objects.create(
+                        variant=variant,
+                        type=InventoryLog.IN,
+                        quantity=item.quantity,
+                        note=f"Cancelled order item from {order.order_number}",
+                    )
+            item.is_cancelled = True
+            item.cancelled_at = now
+            item.save(update_fields=["is_cancelled", "cancelled_at"])
+            order.coupon_discount_amount = coupon_discount
+            order.discount_amount = remaining_product_discount + coupon_discount
+            order.total_amount = new_total
+            order.save(update_fields=[
+                "coupon",
+                "coupon_code",
+                "coupon_discount_amount",
+                "discount_amount",
+                "total_amount",
+                "updated_at",
+            ])
+            Payment.objects.filter(
+                order=order,
+                payment_status=Payment.PENDING,
+            ).update(amount=order.total_amount)
+
+        refreshed_order = (
+            Order.objects.filter(pk=order.pk)
+            .prefetch_related(
+                "items__variant__product__images",
+                "items__return_requests",
+                "payments",
+                "history",
+            )
+            .get()
+        )
+        return Response({
+            "detail": "Item cancelled successfully.",
+            "refund": refund,
+            "order": OrderSerializer(refreshed_order, context={"request": request}).data,
+        })
+
+
+class CustomerOrderItemReturnView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, order_id, item_id):
         try:
             order = (
                 Order.objects.select_for_update()
-                .get(pk=pk, user=request.user)
+                .get(pk=order_id, user=request.user)
             )
         except Order.DoesNotExist:
             return Response(
@@ -187,29 +517,46 @@ class CustomerOrderReturnView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        order.order_status = Order.RETURNED
-        order.return_reason = reason
-        order.save(update_fields=["order_status", "return_reason", "updated_at"])
-        OrderReturn.objects.create(
-            order=order,
-            reason=reason,
-            refund_amount=order.total_amount,
+        item = (
+            OrderItem.objects.select_for_update()
+            .filter(pk=item_id, order=order)
+            .first()
         )
-        OrderStatusHistory.objects.create(
+        if item is None:
+            return Response(
+                {"detail": "Order item not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if item.is_cancelled:
+            return Response(
+                {"detail": "Cancelled items cannot be returned."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if item.return_requests.filter(
+            status__in=(OrderReturn.REQUESTED, OrderReturn.APPROVED)
+        ).exists():
+            return Response(
+                {"detail": "A return for this item is already requested or approved."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        refund_amount = calculate_item_return_refund(order, item)
+        return_request = OrderReturn.objects.create(
             order=order,
-            status=Order.RETURNED,
+            item=item,
+            reason=reason,
+            refund_amount=refund_amount,
         )
 
         return Response(
             {
-                "detail": "Order returned successfully.",
-                "order": {
-                    "id": order.id,
-                    "order_number": order.order_number,
-                    "order_status": order.order_status,
-                },
+                "detail": "Return request submitted for this item.",
+                "return_id": return_request.id,
+                "item_id": item.id,
+                "refund_amount": return_request.refund_amount,
+                "status": return_request.status,
             },
-            status=status.HTTP_200_OK,
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -293,6 +640,11 @@ class CustomerAvailableCouponsView(APIView):
                     "description": coupon.description,
                     "discount_type": coupon.discount_type,
                     "discount_value": str(coupon.discount_value),
+                    "max_discount_amount": (
+                        str(coupon.max_discount_amount)
+                        if coupon.max_discount_amount is not None
+                        else None
+                    ),
                     "minimum_order_amount": str(coupon.minimum_order_amount),
                     "eligible": subtotal >= coupon.minimum_order_amount,
                     "discount_amount": str(calculate_coupon_discount(subtotal, coupon))
@@ -399,8 +751,12 @@ class CustomerCheckoutView(APIView):
             "country": address.country,
         }
 
+        pricing_by_variant = offer_prices(variants)
         subtotal = sum(
-            (variants_by_id[variant_id].price * quantity for variant_id, quantity in quantities.items()),
+            (
+                pricing_by_variant[variant_id]["price"] * quantity
+                for variant_id, quantity in quantities.items()
+            ),
             start=Decimal("0.00"),
         )
         original_subtotal = sum(
@@ -456,6 +812,7 @@ class CustomerCheckoutView(APIView):
             user=request.user,
             total_amount=order_total,
             discount_amount=discount_amount,
+            coupon_discount_amount=coupon_discount,
             shipping_charge=0,
             order_status=Order.PROCESSING if wallet else Order.PENDING,
             payment_method=payment_method,
@@ -465,31 +822,38 @@ class CustomerCheckoutView(APIView):
             checkout_from_cart=bool(cart_items),
         )
 
+        order_items = []
+        inventory_logs = []
+        updated_at = timezone.now()
         for variant_id, quantity in quantities.items():
             variant = variants_by_id[variant_id]
-            OrderItem.objects.create(
+            product_images = variant.product.images.all()
+            product_image = next(iter(product_images), None)
+            order_items.append(OrderItem(
                 order=order,
                 variant=variant,
                 category=variant.product.category,
                 product_name=variant.product.name,
-                product_image=next(iter(variant.product.images.all()), None).image.name
-                if variant.product.images.all()
-                else "",
+                product_image=product_image.image.name if product_image else "",
                 sku=variant.sku,
                 size=variant.size,
                 color=variant.color,
                 quantity=quantity,
-                price=variant.price,
-                total_price=variant.price * quantity,
-            )
+                price=pricing_by_variant[variant_id]["price"],
+                total_price=pricing_by_variant[variant_id]["price"] * quantity,
+            ))
             variant.stock -= quantity
-            variant.save(update_fields=["stock", "updated_at"])
-            InventoryLog.objects.create(
+            variant.updated_at = updated_at
+            inventory_logs.append(InventoryLog(
                 variant=variant,
                 type=InventoryLog.OUT,
                 quantity=quantity,
                 note=f"Checkout reservation for order {order.order_number}",
-            )
+            ))
+
+        OrderItem.objects.bulk_create(order_items)
+        ProductVariant.objects.bulk_update(variants, ["stock", "updated_at"])
+        InventoryLog.objects.bulk_create(inventory_logs)
 
         OrderStatusHistory.objects.create(order=order, status=order.order_status)
         payment = Payment.objects.create(
@@ -538,7 +902,16 @@ class CustomerCheckoutView(APIView):
                 },
             }, status=status.HTTP_201_CREATED)
 
-        return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
+        order = Order.objects.prefetch_related(
+            "items__variant__product__images",
+            "items__return_requests",
+            "payments",
+            "history",
+        ).get(pk=order.pk)
+        return Response(
+            OrderSerializer(order, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class CustomerPaymentVerifyView(APIView):
@@ -561,10 +934,14 @@ class CustomerPaymentVerifyView(APIView):
         ).first()
         if not payment:
             return Response({"detail": "Checkout payment was not found."}, status=status.HTTP_404_NOT_FOUND)
-
         if payment.payment_status == Payment.PAID:
             if payment.transaction_id == payment_id:
-                return Response(OrderSerializer(payment.order).data)
+                return Response(
+                    OrderSerializer(
+                        payment.order,
+                        context={"request": request},
+                    ).data
+                )
             return Response({"detail": "This order has already been paid."}, status=status.HTTP_409_CONFLICT)
 
         expected_signature = hmac.new(
@@ -595,7 +972,9 @@ class CustomerPaymentVerifyView(APIView):
             if order.order_status != Order.PENDING:
                 return Response({"detail": "This checkout is no longer pending."}, status=status.HTTP_409_CONFLICT)
             if payment.payment_status == Payment.PAID:
-                return Response(OrderSerializer(order).data)
+                return Response(
+                    OrderSerializer(order, context={"request": request}).data
+                )
 
             payment.payment_status = Payment.PAID
             payment.transaction_id = payment_id
@@ -620,7 +999,9 @@ class CustomerPaymentVerifyView(APIView):
                             cart_item.quantity -= item.quantity
                             cart_item.save(update_fields=["quantity", "updated_at"])
 
-            return Response(OrderSerializer(order).data)
+            return Response(
+                OrderSerializer(order, context={"request": request}).data
+            )
 
 
 class CustomerPaymentCancelView(APIView):

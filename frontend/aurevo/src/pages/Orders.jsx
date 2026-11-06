@@ -1,7 +1,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { getOrders, cancelOrder, returnOrder, submitOrderItemReview } from "../api/orders";
+import { getOrders, cancelOrder, cancelOrderItem, returnOrderItem, submitOrderItemReview } from "../api/orders";
 import AccountLayout from "../Components/AccountLayout";
 import ConfirmDialog from "../Components/ConfirmDialog";
 import { mediaUrl } from "../utils/media";
@@ -58,8 +58,10 @@ export default function Orders() {
   const [reviewRating, setReviewRating] = useState("5");
   const [reviewComment, setReviewComment] = useState("");
   const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewErrors, setReviewErrors] = useState({});
   const [confirmation, setConfirmation] = useState(null);
   const [returnReason, setReturnReason] = useState("");
+  const [returnError, setReturnError] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const returnReasonInput = useRef(null);
@@ -94,8 +96,8 @@ export default function Orders() {
   }, []);
 
   async function handleCancel(order) {
-    if (order.order_status !== "pending") {
-      setError("Only pending orders can be cancelled online.");
+    if (!["pending", "processing"].includes(order.order_status)) {
+      setError("Orders can only be cancelled before they are shipped.");
       return;
     }
 
@@ -104,8 +106,14 @@ export default function Orders() {
     setMessage("");
 
     try {
-      await cancelOrder(order.id);
-      setMessage(`Order ${order.order_number} was cancelled.`);
+      const response = await cancelOrder(order.id);
+      setMessage(
+        response.data.refund
+          ? response.data.refund.method === "wallet"
+            ? `Order ${order.order_number} was cancelled. ${money(response.data.refund.amount)} was credited to your wallet.`
+            : `Order ${order.order_number} was cancelled. A Razorpay refund of ${money(response.data.refund.amount)} was requested.`
+          : `Order ${order.order_number} was cancelled.`
+      );
       setConfirmation(null);
       await loadOrders();
     } catch (err) {
@@ -117,18 +125,9 @@ export default function Orders() {
     }
   }
 
-  async function handleReturn(order) {
-    if (order.order_status !== "delivered") {
-      setError("Only delivered orders can be returned.");
-      return;
-    }
-
-    if (!returnReason.trim()) {
-      setError("Please provide a reason for the return.");
-      return;
-    }
-    if (returnReason.trim().length > 1000) {
-      setError("Return reason must be 1000 characters or fewer.");
+  async function handleCancelItem(order, item) {
+    if (!item.can_cancel) {
+      setError("This item can no longer be cancelled online.");
       return;
     }
 
@@ -137,17 +136,66 @@ export default function Orders() {
     setMessage("");
 
     try {
-      await returnOrder(order.id, returnReason.trim());
-      setMessage(`Order ${order.order_number} was returned.`);
+      const response = await cancelOrderItem(order.id, item.id);
+      setOrders((current) =>
+        current.map((entry) => entry.id === order.id ? response.data.order : entry)
+      );
+      setMessage(
+        response.data.order.order_status === "cancelled"
+          ? `All items in order ${order.order_number} were cancelled.`
+          : `${item.product_name} was cancelled.`
+      );
+      if (response.data.refund) {
+        setMessage((current) => `${current} ${
+          response.data.refund.method === "wallet"
+            ? `${money(response.data.refund.amount)} was credited to your wallet.`
+            : `A Razorpay refund of ${money(response.data.refund.amount)} was requested.`
+        }`);
+      }
+      setConfirmation(null);
+    } catch (err) {
+      setError(err.response?.data?.detail || "Unable to cancel this item.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleReturn(order, item) {
+    if (!item.can_return) {
+      setError("This item cannot be returned.");
+      return;
+    }
+
+    if (!returnReason.trim()) {
+      setReturnError("Please provide a reason for the return.");
+      return;
+    }
+    if (returnReason.trim().length > 1000) {
+      setReturnError("Return reason must be 1000 characters or fewer.");
+      return;
+    }
+
+    setBusyId(order.id);
+    setReturnError("");
+    setError("");
+    setMessage("");
+
+    try {
+      const response = await returnOrderItem(order.id, item.id, returnReason.trim());
+      setMessage(
+        `${item.product_name} return requested. ${money(response.data.refund_amount)} will be credited to your wallet if approved.`
+      );
       setConfirmation(null);
       setReturnReason("");
+      setReturnError("");
       await loadOrders();
     } catch (err) {
-      setError(
-        err.response?.data?.reason?.[0]
-          || err.response?.data?.detail
-          || "Unable to return this order."
-      );
+      const data = err.response?.data;
+      if (data?.reason) {
+        setReturnError(Array.isArray(data.reason) ? data.reason[0] : data.reason);
+      } else {
+        setError(data?.detail || "Unable to return this order.");
+      }
     } finally {
       setBusyId(null);
     }
@@ -158,6 +206,7 @@ export default function Orders() {
     if (!reviewTarget) return;
 
     setReviewBusy(true);
+    setReviewErrors({});
     setError("");
     setMessage("");
     try {
@@ -171,7 +220,19 @@ export default function Orders() {
       setReviewComment("");
       await loadOrders();
     } catch (err) {
-      setError(err.response?.data?.detail || "Unable to submit your review.");
+      const data = err.response?.data;
+      const nextErrors = {};
+      if (data?.rating) {
+        nextErrors.rating = Array.isArray(data.rating) ? data.rating[0] : data.rating;
+      }
+      if (data?.comment) {
+        nextErrors.comment = Array.isArray(data.comment) ? data.comment[0] : data.comment;
+      }
+      if (Object.keys(nextErrors).length) {
+        setReviewErrors(nextErrors);
+      } else {
+        setError(data?.detail || "Unable to submit your review.");
+      }
     } finally {
       setReviewBusy(false);
     }
@@ -318,7 +379,7 @@ export default function Orders() {
             ].filter(Boolean);
 
             return (
-              <article className="order-card" key={order.id}>
+              <article className={`order-card${isExpanded ? " is-expanded" : ""}`} key={order.id}>
                 <div className="order-card-header">
                   <div>
                     <span className="order-label">ORDER NUMBER</span>
@@ -387,7 +448,7 @@ export default function Orders() {
                     {isExpanded ? "Hide details" : "View details"}
                   </button>
 
-                  {order.order_status === "pending" && (
+                  {["pending", "processing"].includes(order.order_status) && (
                     <button
                       className="order-cancel-button"
                       type="button"
@@ -401,20 +462,6 @@ export default function Orders() {
                     </button>
                   )}
 
-                  {order.order_status === "delivered" && (
-                    <button
-                      className="order-return-button"
-                      type="button"
-                      disabled={busyId === order.id}
-                      onClick={() => {
-                        setError("");
-                        setReturnReason("");
-                        setConfirmation({ type: "return", order });
-                      }}
-                    >
-                      {busyId === order.id ? "Returning..." : "Return order"}
-                    </button>
-                  )}
                 </div>
 
                 {isExpanded && (
@@ -476,130 +523,192 @@ export default function Orders() {
                       )}
                     </section>
 
-                    <h4>Items in this order</h4>
-
-                    {order.items?.length ? (
-                      order.items.map((item) => (
-                        <div className="order-item" key={item.id}>
-                          <div className="order-item-product">
-                            {item.image ? (
-                              <img className="order-item-image" src={mediaUrl(item.image)} alt={item.product_name} loading="lazy" />
-                            ) : (
-                              <span className="order-item-image order-item-image-empty" aria-label="Product image unavailable">No image</span>
-                            )}
-                            <div className="order-item-copy">
-                              <strong>{item.product_name}</strong>
-                              <p>
-                                SKU: {item.sku || "—"} · Size: {item.size || "—"}
-                                {" · "}Color: {item.color || "—"}
-                              </p>
-                              <p>Quantity: {item.quantity}</p>
-                            </div>
-                          </div>
-                          {order.order_status === "delivered" && item.product_id && (
-                            <div className="order-item-review">
-                              {item.reviewed ? (
-                                <span className="order-review-submitted">Review submitted</span>
-                              ) : reviewTarget?.itemId === item.id ? (
-                                <form className="order-review-form" onSubmit={handleReviewSubmit}>
-                                  <label>
-                                    Your rating
-                                    <select value={reviewRating} onChange={(event) => setReviewRating(event.target.value)}>
-                                      <option value="5">5 stars · Loved it</option>
-                                      <option value="4">4 stars · Liked it</option>
-                                      <option value="3">3 stars · It was okay</option>
-                                      <option value="2">2 stars · Disappointed</option>
-                                      <option value="1">1 star · Not for me</option>
-                                    </select>
-                                  </label>
-                                  <label>
-                                    Your review <span>(optional)</span>
-                                    <textarea
-                                      value={reviewComment}
-                                      onChange={(event) => setReviewComment(event.target.value)}
-                                      maxLength={2000}
-                                      rows={3}
-                                      placeholder="Share what you thought about this product"
-                                    />
-                                  </label>
-                                  <div className="order-review-actions">
-                                    <button className="order-review-submit" type="submit" disabled={reviewBusy}>
-                                      {reviewBusy ? "Submitting..." : "Submit review"}
-                                    </button>
-                                    <button className="order-review-cancel" type="button" disabled={reviewBusy} onClick={() => setReviewTarget(null)}>
-                                      Cancel
-                                    </button>
-                                  </div>
-                                </form>
-                              ) : (
-                                <button
-                                  className="order-review-open"
-                                  type="button"
-                                  onClick={() => {
-                                    setError("");
-                                    setReviewRating("5");
-                                    setReviewComment("");
-                                    setReviewTarget({ orderId: order.id, itemId: item.id });
-                                  }}
-                                >
-                                  Write a review
-                                </button>
-                              )}
-                            </div>
-                          )}
-                          <strong className="order-item-total">{money(item.total_price)}</strong>
+                    <section className="order-items-section" aria-labelledby={`order-items-${order.id}`}>
+                      <div className="order-detail-heading">
+                        <div>
+                          <span className="order-label">IN THIS ORDER</span>
+                          <h4 id={`order-items-${order.id}`}>Your items</h4>
                         </div>
-                      ))
-                    ) : (
-                      <p>No item details are available.</p>
-                    )}
+                        <span className="order-item-count">
+                          {itemCount} {itemCount === 1 ? "item" : "items"}
+                        </span>
+                      </div>
 
-                    <div className="order-total-lines">
-                      <p>
-                        Order total:{" "}
-                        <strong>{money(order.total_amount)}</strong>
-                      </p>
-                      <p>
-                        Discount: <strong>{money(order.discount_amount)}</strong>
-                      </p>
-                      <p>
-                        Shipping: <strong>{money(order.shipping_charge)}</strong>
-                      </p>
-                      <p>
-                        Payment method:{" "}
-                        <strong>{readable(order.payment_method || "Not specified")}</strong>
-                      </p>
-                      {order.coupon_code && (
-                        <p>
-                          Coupon applied: <strong>{order.coupon_code}</strong>
-                        </p>
-                      )}
-                    </div>
-
-                    <section className="order-address" aria-labelledby={`order-address-${order.id}`}>
-                      <h4 id={`order-address-${order.id}`}>Delivery address</h4>
-                      {addressLines.length ? (
-                        <address>
-                          {addressLines.map((line, index) => (
-                            <span key={`${line}-${index}`}>{line}</span>
-                          ))}
-                        </address>
+                      {order.items?.length ? (
+                        order.items.map((item) => (
+                          <div className="order-item" key={item.id}>
+                            <div className="order-item-product">
+                              {item.image ? (
+                                <img className="order-item-image" src={mediaUrl(item.image)} alt={item.product_name} loading="lazy" />
+                              ) : (
+                                <span className="order-item-image order-item-image-empty" aria-label="Product image unavailable">No image</span>
+                              )}
+                              <div className="order-item-copy">
+                                <strong>{item.product_name}</strong>
+                                <p>
+                                  SKU: {item.sku || "—"} · Size: {item.size || "—"}
+                                  {" · "}Color: {item.color || "—"}
+                                </p>
+                                <p>Quantity: {item.quantity}</p>
+                                {item.is_cancelled && (
+                                  <span className="order-item-cancelled">Cancelled</span>
+                                )}
+                                {item.return_status && (
+                                  <span className={`order-item-return-status ${item.return_status}`}>
+                                    Return {readable(item.return_status)}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {item.can_return && (
+                              <button
+                                className="order-item-return-button"
+                                type="button"
+                                disabled={busyId === order.id}
+                                onClick={() => {
+                                  setError("");
+                                  setReturnError("");
+                                  setReturnReason("");
+                                  setConfirmation({ type: "return", order, item });
+                                }}
+                              >
+                                {busyId === order.id && confirmation?.item?.id === item.id
+                                  ? "Requesting..."
+                                  : "Return this product"}
+                              </button>
+                            )}
+                            {item.can_cancel && (
+                              <button
+                                className="order-item-cancel-button"
+                                type="button"
+                                disabled={busyId === order.id}
+                                onClick={() => {
+                                  setError("");
+                                  setConfirmation({ type: "cancel-item", order, item });
+                                }}
+                              >
+                                {busyId === order.id && confirmation?.item?.id === item.id
+                                  ? "Cancelling..."
+                                  : "Cancel item"}
+                              </button>
+                            )}
+                            {order.order_status === "delivered" && item.product_id && (
+                              <div className="order-item-review">
+                                {item.reviewed ? (
+                                  <span className="order-review-submitted">Review submitted</span>
+                                ) : reviewTarget?.itemId === item.id ? (
+                                  <form className="order-review-form" onSubmit={handleReviewSubmit}>
+                                    <label>
+                                      Your rating
+                                      <select
+                                        value={reviewRating}
+                                        onChange={(event) => {
+                                          setReviewRating(event.target.value);
+                                          setReviewErrors((current) => ({ ...current, rating: undefined }));
+                                        }}
+                                      >
+                                        <option value="5">5 stars · Loved it</option>
+                                        <option value="4">4 stars · Liked it</option>
+                                        <option value="3">3 stars · It was okay</option>
+                                        <option value="2">2 stars · Disappointed</option>
+                                        <option value="1">1 star · Not for me</option>
+                                      </select>
+                                      {reviewErrors.rating && <span className="return-reason-error" role="alert">{reviewErrors.rating}</span>}
+                                    </label>
+                                    <label>
+                                      Your review <span>(optional)</span>
+                                      <textarea
+                                        value={reviewComment}
+                                        onChange={(event) => {
+                                          setReviewComment(event.target.value);
+                                          if (event.target.value.length <= 2000) {
+                                            setReviewErrors((current) => ({ ...current, comment: undefined }));
+                                          }
+                                        }}
+                                        maxLength={2000}
+                                        rows={3}
+                                        placeholder="Share what you thought about this product"
+                                      />
+                                      {reviewErrors.comment && <span className="return-reason-error" role="alert">{reviewErrors.comment}</span>}
+                                    </label>
+                                    <div className="order-review-actions">
+                                      <button className="order-review-submit" type="submit" disabled={reviewBusy}>
+                                        {reviewBusy ? "Submitting..." : "Submit review"}
+                                      </button>
+                                      <button className="order-review-cancel" type="button" disabled={reviewBusy} onClick={() => setReviewTarget(null)}>
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </form>
+                                ) : (
+                                  <button
+                                    className="order-review-open"
+                                    type="button"
+                                    onClick={() => {
+                                      setError("");
+                                      setReviewRating("5");
+                                      setReviewComment("");
+                                      setReviewErrors({});
+                                      setReviewTarget({ orderId: order.id, itemId: item.id });
+                                    }}
+                                  >
+                                    Write a review
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                            <strong className="order-item-total">{money(item.total_price)}</strong>
+                          </div>
+                        ))
                       ) : (
-                        <p>Delivery address details are not available.</p>
+                        <p className="order-detail-empty">No item details are available.</p>
                       )}
                     </section>
 
-                    <h4>Payment history</h4>
-                    {order.payments?.length ? (
-                      order.payments.map((payment) => (
-                        <p className="order-history-line" key={payment.id}>
-                          {readable(payment.payment_status)} —{" "}
-                          {money(payment.amount)} — {date(payment.created_at)}
+                    <div className="order-detail-aside">
+                      <section className="order-address" aria-labelledby={`order-address-${order.id}`}>
+                        <span className="order-label">DELIVERING TO</span>
+                        <h4 id={`order-address-${order.id}`}>Delivery address</h4>
+                        {addressLines.length ? (
+                          <address>
+                            {addressLines.map((line, index) => (
+                              <span key={`${line}-${index}`}>{line}</span>
+                            ))}
+                          </address>
+                        ) : (
+                          <p>Delivery address details are not available.</p>
+                        )}
+                      </section>
+
+                      <section className="order-payment" aria-labelledby={`order-payment-${order.id}`}>
+                        <span className="order-label">ORDER SUMMARY</span>
+                        <h4 id={`order-payment-${order.id}`}>Payment summary</h4>
+                        <div className="order-total-lines">
+                          <p>Discount <strong>{money(order.discount_amount)}</strong></p>
+                          <p>Shipping <strong>{money(order.shipping_charge)}</strong></p>
+                          {order.coupon_code && (
+                            <p>Coupon <strong>{order.coupon_code}</strong></p>
+                          )}
+                          <p className="order-grand-total">Order total <strong>{money(order.total_amount)}</strong></p>
+                        </div>
+                        <p className="order-payment-method">
+                          Paid by {readable(order.payment_method || "Not specified")}
                         </p>
-                      ))
-                    ) : (
-                      <p>No payment records available.</p>
-                    )}
+                        <div className="order-payment-history">
+                          <h5>Payment history</h5>
+                          {order.payments?.length ? (
+                            order.payments.map((payment) => (
+                              <p className="order-history-line" key={payment.id}>
+                                <span>{readable(payment.payment_status)} · {date(payment.created_at)}</span>
+                                <strong>{money(payment.amount)}</strong>
+                              </p>
+                            ))
+                          ) : (
+                            <p className="order-detail-empty">No payment records available.</p>
+                          )}
+                        </div>
+                      </section>
+                    </div>
 
                     <p className="order-updates-refresh-note">
                       Order status and tracking details refresh when you select Refresh above.
@@ -613,20 +722,24 @@ export default function Orders() {
       )}
       {confirmation && (
         <ConfirmDialog
-          title={confirmation.type === "return" ? "Return this order?" : "Cancel this order?"}
+          title={confirmation.type === "return" ? "Return this product?" : confirmation.type === "cancel-item" ? "Cancel this item?" : "Cancel this order?"}
           initialFocusRef={confirmation.type === "return" ? returnReasonInput : undefined}
           text={
             confirmation.type === "return"
-              ? `Tell us why you are returning order ${confirmation.order.order_number}.`
+              ? `Tell us why you are returning ${confirmation.item.product_name} from order ${confirmation.order.order_number}.`
+              : confirmation.type === "cancel-item"
+                ? `Cancel ${confirmation.item.product_name} from order ${confirmation.order.order_number}? The order total will be updated.`
               : `Are you sure you want to cancel order ${confirmation.order.order_number}?`
           }
-          confirmLabel={confirmation.type === "return" ? "Submit return" : "Cancel order"}
-          danger={confirmation.type === "cancel"}
+          confirmLabel={confirmation.type === "return" ? "Request item return" : confirmation.type === "cancel-item" ? "Cancel item" : "Cancel order"}
+          danger={confirmation.type !== "return"}
           busy={busyId === confirmation.order.id}
           onConfirm={() =>
             confirmation.type === "return"
-              ? handleReturn(confirmation.order)
-              : handleCancel(confirmation.order)
+              ? handleReturn(confirmation.order, confirmation.item)
+              : confirmation.type === "cancel-item"
+                ? handleCancelItem(confirmation.order, confirmation.item)
+                : handleCancel(confirmation.order)
           }
           onCancel={() => {
             if (busyId === null) {
@@ -636,22 +749,29 @@ export default function Orders() {
           }}
         >
           {confirmation.type === "return" && (
-            <label className="return-reason-field">
-              Return reason
-              <textarea
-                ref={returnReasonInput}
-                maxLength={1000}
-                required
-                rows={4}
-                value={returnReason}
-                onChange={(event) => {
-                  setError("");
-                  setReturnReason(event.target.value);
-                }}
-                placeholder="Please describe why you want to return this order"
-              />
-              {error && <span className="return-reason-error" role="alert">{error}</span>}
-            </label>
+            <>
+              <p className="return-refund-estimate">
+                Estimated refund: <strong>{money(confirmation.item.return_refund_amount)}</strong>
+                <span>Only this product’s paid price is refunded; shipping is not included. Wallet credit is issued after approval.</span>
+              </p>
+              <label className="return-reason-field">
+                Return reason
+                <textarea
+                  ref={returnReasonInput}
+                  maxLength={1000}
+                  required
+                  rows={4}
+                  value={returnReason}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setReturnReason(value);
+                    if (value.trim() && value.trim().length <= 1000) setReturnError("");
+                  }}
+                  placeholder="Please describe why you want to return this product"
+                />
+                {returnError && <span className="return-reason-error" role="alert">{returnError}</span>}
+              </label>
+            </>
           )}
         </ConfirmDialog>
       )}

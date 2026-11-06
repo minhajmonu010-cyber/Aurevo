@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { getAddresses } from "../api/addresses";
+import { createAddress, getAddresses } from "../api/addresses";
 import { getCart } from "../api/catalog";
 import AccountLayout from "../Components/AccountLayout";
 import { cancelPayment, createOrder, getAvailableCoupons, getCheckoutOptions, verifyPayment } from "../api/orders";
@@ -8,6 +8,20 @@ import { getWallet } from "../api/wallet";
 import { useAuth } from "../context/authState";
 import { formatPrice } from "../utils/format";
 import "../styles/checkout.css";
+
+const EMPTY_CHECKOUT_ADDRESS = {
+  full_name: "",
+  phone: "",
+  address_line1: "",
+  address_line2: "",
+  city: "",
+  district: "",
+  state: "",
+  postal_code: "",
+  country: "India",
+  address_type: "home",
+  is_default: false,
+};
 
 function loadRazorpayScript() {
   if (window.Razorpay) return Promise.resolve(true);
@@ -161,6 +175,33 @@ async function downloadInvoice(order) {
   doc.save(`Aurevo-Invoice-${order.order_number || order.id}.pdf`);
 }
 
+function formatOrderDate(value) {
+  if (!value) return "Just now";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Just now"
+    : new Intl.DateTimeFormat("en-IN", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(date);
+}
+
+function OrderSuccessImage({ src, name }) {
+  const [failed, setFailed] = useState(!src);
+
+  return (
+    <div className="checkout-success-item-image">
+      {!failed ? (
+        <img src={src} alt="" onError={() => setFailed(true)} />
+      ) : (
+        <span aria-label={`${name} image unavailable`}>
+          {name?.trim().charAt(0)?.toUpperCase() || "A"}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function Checkout() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -169,6 +210,12 @@ export default function Checkout() {
 
   const [addresses, setAddresses] = useState([]);
   const [selectedAddressId, setSelectedAddressId] = useState("");
+  const [showAddressForm, setShowAddressForm] = useState(false);
+  const [addressForm, setAddressForm] = useState(EMPTY_CHECKOUT_ADDRESS);
+  const [addressFormError, setAddressFormError] = useState("");
+  const [addressFieldErrors, setAddressFieldErrors] = useState({});
+  const [savingAddress, setSavingAddress] = useState(false);
+  const addressFormContainer = useRef(null);
   const [cart, setCart] = useState(null);
   const [loading, setLoading] = useState(true);
   const [placingOrder, setPlacingOrder] = useState(false);
@@ -185,6 +232,7 @@ export default function Checkout() {
   const [couponError, setCouponError] = useState("");
   const [error, setError] = useState("");
   const [order, setOrder] = useState(null);
+  const [copyMessage, setCopyMessage] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -205,6 +253,7 @@ export default function Checkout() {
 
         const savedAddresses = addressResponse.data || [];
         setAddresses(savedAddresses);
+        setShowAddressForm(savedAddresses.length === 0);
         setSelectedAddressId(
           String(savedAddresses.find((address) => address.is_default)?.id || savedAddresses[0]?.id || "")
         );
@@ -229,11 +278,90 @@ export default function Checkout() {
     (sum, item) => sum + Number(item.line_total ?? Number(item.price) * item.quantity),
     0
   );
+  const offerSavings = items.reduce(
+    (sum, item) => sum + Number(item.offer_line_discount || 0),
+    0
+  );
   const couponDiscount = couponApplied && appliedCoupon
     ? Number(appliedCoupon.discount_amount)
     : 0;
   const orderTotal = Math.max(subtotal - couponDiscount, 0);
   const walletCanPay = walletBalance !== null && walletBalance >= orderTotal;
+
+  function handleAddressFieldChange(event) {
+    const { name, value, checked, type } = event.target;
+    setAddressForm((current) => ({
+      ...current,
+      [name]: type === "checkbox" ? checked : value,
+    }));
+    setAddressFieldErrors((current) => {
+      if (!current[name]) return current;
+      const next = { ...current };
+      delete next[name];
+      return next;
+    });
+    setAddressFormError("");
+  }
+
+  async function handleAddressSubmit() {
+    const invalidField = addressFormContainer.current?.querySelector(":invalid");
+    if (invalidField) {
+      invalidField.reportValidity();
+      invalidField.focus();
+      return;
+    }
+
+    setSavingAddress(true);
+    setAddressFormError("");
+    setAddressFieldErrors({});
+
+    try {
+      const response = await createAddress({
+        ...addressForm,
+        full_name: addressForm.full_name.trim(),
+        phone: addressForm.phone.trim(),
+        address_line1: addressForm.address_line1.trim(),
+        address_line2: addressForm.address_line2.trim(),
+        city: addressForm.city.trim(),
+        district: addressForm.district.trim(),
+        state: addressForm.state.trim(),
+        postal_code: addressForm.postal_code.trim(),
+        country: addressForm.country.trim(),
+      });
+      const savedAddress = response.data;
+      setAddresses((current) => [savedAddress, ...current]);
+      setSelectedAddressId(String(savedAddress.id));
+      setAddressForm(EMPTY_CHECKOUT_ADDRESS);
+      setShowAddressForm(false);
+    } catch (requestError) {
+      const data = requestError.response?.data;
+      if (data && typeof data === "object" && !Array.isArray(data)) {
+        const fieldErrors = Object.fromEntries(
+          Object.entries(data)
+            .filter(([name]) => name in EMPTY_CHECKOUT_ADDRESS)
+            .map(([name, messages]) => [
+              name,
+              Array.isArray(messages) ? messages[0] : messages,
+            ])
+        );
+        setAddressFieldErrors(fieldErrors);
+        const otherErrors = Object.entries(data)
+          .filter(([name]) => !(name in EMPTY_CHECKOUT_ADDRESS))
+          .flatMap(([, messages]) => Array.isArray(messages) ? messages : [messages]);
+        setAddressFormError(
+          otherErrors.length
+            ? otherErrors.join(" ")
+            : Object.keys(fieldErrors).length
+              ? ""
+              : "Could not save this address. Check the details and try again."
+        );
+      } else {
+        setAddressFormError("Could not save this address. Please try again.");
+      }
+    } finally {
+      setSavingAddress(false);
+    }
+  }
 
   async function loadAvailableCoupons() {
     setCouponsOpen(true);
@@ -383,21 +511,185 @@ export default function Checkout() {
     }
   }
 
+  async function copyOrderNumber() {
+    try {
+      await navigator.clipboard.writeText(order.order_number);
+      setCopyMessage("Order number copied.");
+    } catch {
+      setCopyMessage("Could not copy the order number. Please copy it manually.");
+    }
+  }
+
+  const orderItems = order?.items || [];
+  const deliveryAddress = order?.shipping_address || {};
+  const payment = order?.payments?.[0];
+  const orderSteps = [
+    { status: "pending", label: "Order placed" },
+    { status: "processing", label: "Processing" },
+    { status: "shipped", label: "On the way" },
+    { status: "delivered", label: "Delivered" },
+  ];
+  const orderStepIndex = {
+    pending: 0,
+    processing: 1,
+    shipped: 2,
+    delivered: 3,
+    returned: 3,
+  }[order?.order_status] ?? 0;
+  const orderSubtotal = orderItems.reduce(
+    (sum, item) => sum + Number(item.total_price || 0),
+    0
+  );
+  const originalOrderValue = Math.max(
+    Number(order?.total_amount || 0) +
+      Number(order?.discount_amount || 0) -
+      Number(order?.shipping_charge || 0),
+    orderSubtotal
+  );
+
   return order ? (
     <main className="checkout-success-page">
-      <section className="checkout-confirmation" aria-labelledby="checkout-confirmation-title">
-        <span className="checkout-success-mark" aria-hidden="true" />
-        <p className="checkout-eyebrow">ORDER CONFIRMED</p>
-        <h1 id="checkout-confirmation-title">Thank you for your order.</h1>
-        <p>
-          Order <strong>{order.order_number}</strong> is confirmed.
-          {order.payment_method === "cash_on_delivery"
-            ? ` Pay ${formatPrice(order.total_amount)} on delivery.`
-            : order.payment_method === "wallet"
-              ? " Paid from your Aurevo wallet."
-              : " Your payment is confirmed."}
-        </p>
+      <div className="checkout-success-content">
+        <section className="checkout-confirmation" aria-labelledby="checkout-confirmation-title">
+          <div className="checkout-success-heading">
+            <span className="checkout-success-mark" aria-hidden="true" />
+            <div>
+              <p className="checkout-eyebrow">ORDER CONFIRMED</p>
+              <h1 id="checkout-confirmation-title">Thank you for your order.</h1>
+              <p>
+                {order.payment_method === "cash_on_delivery"
+                  ? `Your order is placed. Pay ${formatPrice(order.total_amount)} when it arrives.`
+                  : order.payment_method === "wallet"
+                    ? "Your order is placed and paid from your Aurevo wallet."
+                    : "Your payment is confirmed and your order is placed."}
+              </p>
+            </div>
+          </div>
+
+          <div className="checkout-order-reference">
+            <div>
+              <span>ORDER NUMBER</span>
+              <strong>{order.order_number}</strong>
+            </div>
+            <button type="button" onClick={copyOrderNumber}>Copy</button>
+            <span className="checkout-copy-message" role="status" aria-live="polite">
+              {copyMessage}
+            </span>
+          </div>
+
+          <div className="checkout-order-meta">
+            <div>
+              <span>Placed on</span>
+              <strong>{formatOrderDate(order.created_at)}</strong>
+            </div>
+            <div>
+              <span>Order status</span>
+              <strong className="checkout-status-badge">
+                {(order.order_status || "pending").replaceAll("_", " ")}
+              </strong>
+            </div>
+            <div>
+              <span>Payment</span>
+              <strong>
+                {(order.payment_method || "Payment").replaceAll("_", " ")}
+                {payment?.payment_status
+                  ? ` · ${payment.payment_status.replaceAll("_", " ")}`
+                  : ""}
+              </strong>
+            </div>
+          </div>
+
+          {order.order_status === "cancelled" ? (
+            <p className="checkout-order-status-note">
+              This order has been cancelled. Visit your orders page for more details.
+            </p>
+          ) : (
+            <ol className="checkout-order-progress" aria-label="Order progress">
+              {orderSteps.map((step, index) => (
+                <li
+                  key={step.status}
+                  className={index <= orderStepIndex ? "complete" : ""}
+                  aria-current={index === orderStepIndex ? "step" : undefined}
+                >
+                  <span>{index < orderStepIndex ? "✓" : index + 1}</span>
+                  <small>{step.label}</small>
+                </li>
+              ))}
+            </ol>
+          )}
+
+        <div className="checkout-success-details">
+          <section className="checkout-success-card" aria-labelledby="success-items-title">
+            <div className="checkout-success-card-heading">
+              <h2 id="success-items-title">What you ordered</h2>
+              <span>
+                {orderItems.reduce((sum, item) => sum + item.quantity, 0)} items
+              </span>
+            </div>
+            <div className="checkout-success-items">
+              {orderItems.map((item) => (
+                <article className="checkout-success-item" key={item.id}>
+                  <OrderSuccessImage src={item.image} name={item.product_name} />
+                  <div className="checkout-success-item-copy">
+                    <strong>{item.product_name}</strong>
+                    <span>
+                      {[item.color, item.size && `Size ${item.size}`]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                    <span>Quantity {item.quantity} · {formatPrice(item.price)} each</span>
+                  </div>
+                  <strong>{formatPrice(item.total_price)}</strong>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <div className="checkout-success-side">
+            <section className="checkout-success-card" aria-labelledby="success-delivery-title">
+              <h2 id="success-delivery-title">Delivering to</h2>
+              <address>
+                <strong>{deliveryAddress.full_name}</strong>
+                {deliveryAddress.address_line1 && <span>{deliveryAddress.address_line1}</span>}
+                {deliveryAddress.address_line2 && <span>{deliveryAddress.address_line2}</span>}
+                <span>
+                  {[deliveryAddress.city, deliveryAddress.district, deliveryAddress.state, deliveryAddress.postal_code]
+                    .filter(Boolean)
+                    .join(", ")}
+                </span>
+                {deliveryAddress.country && <span>{deliveryAddress.country}</span>}
+                {deliveryAddress.phone && <span>{deliveryAddress.phone}</span>}
+              </address>
+            </section>
+
+            <section className="checkout-success-card" aria-labelledby="success-total-title">
+              <h2 id="success-total-title">Payment summary</h2>
+              <div className="checkout-success-total-line">
+                <span>Original item value</span>
+                <span>{formatPrice(originalOrderValue)}</span>
+              </div>
+              {Number(order.discount_amount) > 0 && (
+                <div className="checkout-success-total-line savings">
+                  <span>Savings applied</span>
+                  <span>-{formatPrice(order.discount_amount)}</span>
+                </div>
+              )}
+              {Number(order.shipping_charge) > 0 && (
+                <div className="checkout-success-total-line">
+                  <span>Shipping</span>
+                  <span>{formatPrice(order.shipping_charge)}</span>
+                </div>
+              )}
+              <div className="checkout-success-grand-total">
+                <strong>Total paid{order.payment_method === "cash_on_delivery" ? " on delivery" : ""}</strong>
+                <strong>{formatPrice(order.total_amount)}</strong>
+              </div>
+            </section>
+          </div>
+        </div>
+
         <div className="checkout-confirmation-actions">
+          <Link to="/orders" className="checkout-primary-link">View orders</Link>
           <button
             type="button"
             className="checkout-secondary-link checkout-invoice-button"
@@ -405,10 +697,10 @@ export default function Checkout() {
           >
             Download invoice PDF
           </button>
-          <Link to="/orders" className="checkout-primary-link">View orders</Link>
           <Link to="/categories" className="checkout-secondary-link">Continue shopping</Link>
         </div>
-      </section>
+        </section>
+      </div>
     </main>
   ) : (
     <AccountLayout>
@@ -433,7 +725,7 @@ export default function Checkout() {
                       <h2 id="delivery-title">Delivery address</h2>
                     </div>
 
-                    {addresses.length ? (
+                    {addresses.length > 0 && (
                       <div className="checkout-address-list">
                         {addresses.map((address) => (
                           <label
@@ -445,7 +737,12 @@ export default function Checkout() {
                               name="delivery_address"
                               value={address.id}
                               checked={String(address.id) === selectedAddressId}
-                              onChange={() => setSelectedAddressId(String(address.id))}
+                              onChange={() => {
+                                setSelectedAddressId(String(address.id));
+                                if (error === "Choose a delivery address before placing your order.") {
+                                  setError("");
+                                }
+                              }}
                             />
                             <span className="checkout-address-copy">
                               <strong>{address.full_name}</strong>
@@ -463,10 +760,98 @@ export default function Checkout() {
                           </label>
                         ))}
                       </div>
-                    ) : (
-                      <div className="checkout-no-address">
-                        <p>Add a delivery address before placing your order.</p>
-                        <Link to="/address">Manage addresses</Link>
+                    )}
+                    <button
+                      type="button"
+                      className="checkout-add-address-toggle"
+                      onClick={() => {
+                        setShowAddressForm((open) => !open);
+                        setAddressFormError("");
+                      }}
+                    >
+                      {showAddressForm ? "Cancel adding address" : "+ Add a new address"}
+                    </button>
+                    {showAddressForm && (
+                      <div className="checkout-new-address" ref={addressFormContainer}>
+                        {addressFormError && <p className="checkout-address-error" role="alert">{addressFormError}</p>}
+                        <div className="checkout-new-address-grid">
+                          {[
+                            ["full_name", "Full name"],
+                            ["phone", "Phone number"],
+                            ["address_line1", "Address line 1"],
+                            ["address_line2", "Address line 2 (optional)"],
+                            ["city", "City"],
+                            ["district", "District"],
+                            ["state", "State"],
+                            ["postal_code", "Postal code"],
+                            ["country", "Country"],
+                          ].map(([name, label]) => (
+                            <label key={name} className={name === "address_line1" || name === "address_line2" ? "wide" : ""}>
+                              {label}
+                              <input
+                                name={name}
+                                value={addressForm[name]}
+                                onChange={handleAddressFieldChange}
+                                required={!addresses.length && name !== "address_line2"}
+                                maxLength={
+                                  name === "full_name"
+                                    ? 150
+                                    : name === "phone"
+                                      ? 20
+                                      : ["address_line1", "address_line2"].includes(name)
+                                        ? 255
+                                        : name === "postal_code"
+                                          ? 12
+                                          : 100
+                                }
+                                autoComplete={{
+                                  full_name: "name",
+                                  phone: "tel",
+                                  address_line1: "address-line1",
+                                  address_line2: "address-line2",
+                                  city: "address-level2",
+                                  district: "address-level3",
+                                  state: "address-level1",
+                                  postal_code: "postal-code",
+                                  country: "country-name",
+                                }[name]}
+                                aria-invalid={Boolean(addressFieldErrors[name])}
+                              />
+                              {addressFieldErrors[name] && (
+                                <span className="checkout-address-error" role="alert">{addressFieldErrors[name]}</span>
+                              )}
+                            </label>
+                          ))}
+                          <label>
+                            Address type
+                            <select
+                              name="address_type"
+                              value={addressForm.address_type}
+                              onChange={handleAddressFieldChange}
+                            >
+                              <option value="home">Home</option>
+                              <option value="work">Work</option>
+                              <option value="other">Other</option>
+                            </select>
+                          </label>
+                          <label className="checkout-address-default">
+                            <input
+                              type="checkbox"
+                              name="is_default"
+                              checked={addressForm.is_default}
+                              onChange={handleAddressFieldChange}
+                            />
+                            Set as default address
+                          </label>
+                        </div>
+                        <button
+                          className="checkout-save-address"
+                          type="button"
+                          onClick={handleAddressSubmit}
+                          disabled={savingAddress}
+                        >
+                          {savingAddress ? "Saving address..." : "Save and use this address"}
+                        </button>
                       </div>
                     )}
                   </section>
@@ -545,11 +930,22 @@ export default function Checkout() {
                             <span>{item.color}{item.color && item.size ? " · " : ""}{item.size ? `Size ${item.size}` : ""}</span>
                           )}
                           <span>Qty {item.quantity}</span>
+                          {item.offer_name && (
+                            <span className="checkout-offer-applied">
+                              {item.offer_name} · save {formatPrice(item.offer_line_discount)}
+                            </span>
+                          )}
                         </div>
                         <strong>{formatPrice(item.line_total ?? Number(item.price) * item.quantity)}</strong>
                       </div>
                     ))}
                   </div>
+                  {offerSavings > 0 && (
+                    <div className="checkout-discount">
+                      <span>Offer savings</span>
+                      <strong>-{formatPrice(offerSavings)}</strong>
+                    </div>
+                  )}
                   <div className="checkout-coupon">
                     <label htmlFor="coupon-code">Coupon code</label>
                     <div className="checkout-coupon-row">
@@ -592,6 +988,9 @@ export default function Checkout() {
                                     ? `Save ${formatPrice(coupon.discount_amount)}`
                                     : `Minimum order ${formatPrice(coupon.minimum_order_amount)}`}
                                 </small>
+                                {coupon.max_discount_amount && (
+                                 <small>Maximum saving {formatPrice(coupon.max_discount_amount)}</small>
+                                )}
                               </div>
                               <button
                                 type="button"

@@ -4,6 +4,7 @@ from django.shortcuts import render
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -11,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from catalog.models import Product, ProductVariant
+from catalog.offer_pricing import offer_prices
 from .serializers import CartItemWriteSerializer, CartQuantitySerializer, WishlistItemWriteSerializer
 from .models import CartItem, WishlistItem
 
@@ -20,10 +22,12 @@ def image_url(product, request):
     return request.build_absolute_uri(image.image.url) if image else None
 
 
-def cart_data(item, request):
+def cart_data(item, request, pricing=None):
     variant = item.variant
     product = variant.product
     original_price = variant.original_price or variant.price
+    offer = pricing or {"price": variant.price, "discount": Decimal("0.00"), "name": ""}
+    line_total = offer["price"] * item.quantity
     return {
         "id": item.id,
         "variant_id": variant.id,
@@ -33,30 +37,42 @@ def cart_data(item, request):
         "image": image_url(product, request),
         "size": variant.size,
         "color": variant.color,
-        "price": str(variant.price),
+        "price": str(offer["price"]),
+        "base_price": str(variant.price),
         "original_price": str(original_price),
+        "offer_name": offer["name"],
+        "offer_discount": str(offer["discount"]),
+        "offer_line_discount": str(offer["discount"] * item.quantity),
         "quantity": item.quantity,
         "stock": variant.stock,
-        "line_total": str(variant.price * item.quantity),
+        "line_total": str(line_total),
         "original_line_total": str(original_price * item.quantity),
     }
 
 
 def wishlist_data(item, request):
     product = item.product
-    variant = (
-        ProductVariant.objects.filter(product=product, is_active=True)
-        .order_by("price", "id")
-        .first()
-    )
+    if item.variant_id:
+        variant = item.variant
+    else:
+        variants = getattr(product, "active_variants", None)
+        if variants is None:
+            variants = list(
+                ProductVariant.objects.filter(product=product, is_active=True)
+                .order_by("price", "id")[:1]
+            )
+        variant = variants[0] if variants else None
     return {
         "id": item.id,
         "product_id": product.id,
+        "variant_id": item.variant_id,
         "name": product.name,
         "slug": product.slug,
         "image": image_url(product, request),
         "price": str(variant.price) if variant else None,
-        "in_stock": bool(variant and variant.stock > 0),
+        "size": variant.size if item.variant_id and variant else None,
+        "color": variant.color if item.variant_id and variant else None,
+        "in_stock": bool(variant and variant.is_active and variant.stock > 0),
     }
 
 
@@ -66,10 +82,14 @@ class CartView(APIView):
     def get(self, request):
         items = (
             CartItem.objects.filter(user=request.user)
-            .select_related("variant", "variant__product")
+            .select_related("variant", "variant__product", "variant__product__category")
             .prefetch_related("variant__product__images")
         )
-        rows = [cart_data(item, request) for item in items]
+        pricing_by_variant = offer_prices([item.variant for item in items])
+        rows = [
+            cart_data(item, request, pricing_by_variant[item.variant_id])
+            for item in items
+        ]
         subtotal = sum(
             (Decimal(row["line_total"]) for row in rows),
             Decimal("0.00"),
@@ -127,7 +147,14 @@ class CartView(APIView):
             )
 
         return Response(
-            cart_data(item, request),
+            cart_data(
+                item,
+                request,
+                offer_prices([variant]).get(
+                    variant.id,
+                    {"price": variant.price, "discount": Decimal("0.00"), "name": ""},
+                ),
+            ),
             status=status.HTTP_201_CREATED,
         )
 
@@ -137,7 +164,11 @@ class CartItemView(APIView):
 
     def patch(self, request, pk):
         item = get_object_or_404(
-            CartItem.objects.select_related("variant", "variant__product"),
+            CartItem.objects.select_related(
+                "variant",
+                "variant__product",
+                "variant__product__category",
+            ),
             pk=pk,
             user=request.user,
         )
@@ -153,7 +184,16 @@ class CartItemView(APIView):
 
         item.quantity = quantity
         item.save(update_fields=["quantity", "updated_at"])
-        return Response(cart_data(item, request))
+        return Response(
+            cart_data(
+                item,
+                request,
+                offer_prices([item.variant]).get(
+                    item.variant_id,
+                    {"price": item.variant.price, "discount": Decimal("0.00"), "name": ""},
+                ),
+            )
+        )
 
     def delete(self, request, pk):
         item = get_object_or_404(CartItem, pk=pk, user=request.user)
@@ -171,8 +211,15 @@ class WishlistView(APIView):
                 product__is_active=True,
                 product__category__is_active=True,
             )
-            .select_related("product")
+            .select_related("product", "variant")
             .prefetch_related("product__images")
+            .prefetch_related(
+                Prefetch(
+                    "product__variants",
+                    queryset=ProductVariant.objects.filter(is_active=True).order_by("price", "id"),
+                    to_attr="active_variants",
+                )
+            )
         )
         return Response({
             "items": [wishlist_data(item, request) for item in items]
@@ -189,10 +236,21 @@ class WishlistView(APIView):
             is_active=True,
             category__is_active=True,
         )
+        variant = None
+        if "variant_id" in serializer.validated_data:
+            variant = get_object_or_404(
+                ProductVariant,
+                pk=serializer.validated_data["variant_id"],
+                product=product,
+                is_active=True,
+            )
         item, created = WishlistItem.objects.get_or_create(
             user=request.user,
             product=product,
         )
+        if "variant_id" in serializer.validated_data and item.variant_id != variant.id:
+            item.variant = variant
+            item.save(update_fields=["variant"])
         return Response(
             wishlist_data(item, request),
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,

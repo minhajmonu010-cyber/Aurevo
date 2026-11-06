@@ -101,7 +101,7 @@ export default function AdminLayout() {
       try {
         const [orders, inventory] = await Promise.all([
           getDashboardOrders({ page: 1, page_size: 8 }),
-          getInventory({ status: "all" }),
+        getInventory({ status: "alerts", page: 1, page_size: 12 }),
         ]);
         if (active) {
           setNotificationOrders(orders.results || []);

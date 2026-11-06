@@ -1,9 +1,10 @@
 # Create your views here.
 from django.db.models import Avg, Count, Min, Prefetch, Q
+from django.utils import timezone
+from rest_framework.response import Response
 from rest_framework.generics import ListAPIView, RetrieveAPIView
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
-from django.utils import timezone
 
 from adminpanel.models import Offer
 
@@ -89,6 +90,66 @@ class PublicOfferListView(PublicView, ListAPIView):
             start_date__lte=now,
             end_date__gte=now,
         ).order_by("end_date", "id")
+
+    def list(self, request, *args, **kwargs):
+        offers = list(self.filter_queryset(self.get_queryset()))
+        product_ids = {
+            target_id
+            for offer in offers
+            if offer.applies_to == Offer.PRODUCTS
+            for target_id in offer.target_ids
+        }
+        category_ids = {
+            target_id
+            for offer in offers
+            if offer.applies_to == Offer.CATEGORIES
+            for target_id in offer.target_ids
+        }
+        product_targets = {
+            target_id: {"name": name, "slug": slug}
+            for target_id, name, slug in Product.objects.filter(
+                pk__in=product_ids,
+                is_active=True,
+                category__is_active=True,
+            ).values_list("id", "name", "slug")
+        }
+        category_targets = {
+            target_id: {"name": name, "slug": slug}
+            for target_id, name, slug in Category.objects.filter(
+                pk__in=category_ids,
+                is_active=True,
+                is_system=False,
+            ).values_list("id", "name", "slug")
+        }
+        target_names = {}
+        target_slugs = {}
+        for offer in offers:
+            targets_by_id = (
+                product_targets if offer.applies_to == Offer.PRODUCTS
+                else category_targets if offer.applies_to == Offer.CATEGORIES
+                else {}
+            )
+            target_names[offer.pk] = [
+                targets_by_id[target_id]["name"]
+                for target_id in offer.target_ids
+                if target_id in targets_by_id
+            ]
+            target_slugs[offer.pk] = [
+                targets_by_id[target_id]["slug"]
+                for target_id in offer.target_ids
+                if target_id in targets_by_id
+            ]
+
+        serializer = self.get_serializer(
+            offers,
+            many=True,
+            context={
+                **self.get_serializer_context(),
+                "target_names": target_names,
+                "target_slugs": target_slugs,
+            },
+        )
+        return Response(serializer.data)
 
 
 class ProductListView(PublicView, ListAPIView):

@@ -1,3 +1,8 @@
+import logging
+from decimal import Decimal, InvalidOperation
+
+import requests
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import Coalesce
@@ -9,6 +14,9 @@ from rest_framework.views import APIView
 
 from catalog.inventory import restore_order_stock
 from orders.models import Order, OrderItem, OrderStatusHistory, Payment
+from wallet.models import Wallet, WalletTransaction
+
+logger = logging.getLogger(__name__)
 
 
 class AdminOrderItemSerializer(serializers.ModelSerializer):
@@ -20,7 +28,10 @@ class AdminOrderItemSerializer(serializers.ModelSerializer):
 class AdminPaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Payment
-        fields = ("id", "payment_method", "amount", "transaction_id", "payment_status", "paid_at", "created_at")
+        fields = (
+            "id", "payment_method", "amount", "transaction_id", "payment_status",
+            "refunded_amount", "pending_refund_amount", "refund_id", "paid_at", "created_at",
+        )
 
 
 class AdminOrderHistorySerializer(serializers.ModelSerializer):
@@ -71,10 +82,15 @@ class AdminOrderUpdateSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=Order.STATUSES, required=False)
     tracking_id = serializers.CharField(max_length=100, required=False, allow_blank=True)
     delivery_date = serializers.DateField(required=False, allow_null=True)
+    refund_to_wallet = serializers.BooleanField(required=False)
 
     def validate(self, attrs):
         if not attrs:
             raise serializers.ValidationError("Provide at least one order update.")
+        if attrs.get("refund_to_wallet") and attrs.get("status") != Order.CANCELLED:
+            raise serializers.ValidationError({
+                "refund_to_wallet": "A wallet refund is only available when cancelling an order.",
+            })
         return attrs
 
 
@@ -211,6 +227,7 @@ class AdminOrderStatusView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         update_fields = []
+        refund = None
 
         new_status = data.get("status")
         if (
@@ -224,6 +241,54 @@ class AdminOrderStatusView(APIView):
             )
         if new_status and new_status != order.order_status:
             if new_status == Order.CANCELLED:
+                if data.get("refund_to_wallet"):
+                    if not order.user_id:
+                        return Response(
+                            {"detail": "A guest order cannot be refunded to a customer wallet."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    paid_payments = list(
+                        Payment.objects.select_for_update()
+                        .filter(order=order, payment_status=Payment.PAID)
+                        .order_by("-created_at", "-id")
+                    )
+                    if len(paid_payments) != 1:
+                        return Response(
+                            {"detail": "A wallet refund requires exactly one successful payment."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    payment = paid_payments[0]
+                    refund_amount = order.total_amount
+                    if (
+                        refund_amount <= 0
+                        or refund_amount > payment.amount - payment.refunded_amount
+                    ):
+                        return Response(
+                            {"detail": "The remaining paid amount is insufficient for this refund."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
+                    wallet, _ = Wallet.objects.get_or_create(user=order.user)
+                    wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
+                    wallet.balance += refund_amount
+                    wallet.save(update_fields=["balance", "updated_at"])
+                    WalletTransaction.objects.create(
+                        wallet=wallet,
+                        transaction_type=WalletTransaction.CREDIT,
+                        amount=refund_amount,
+                        description=f"Admin refund for cancelled order {order.order_number}",
+                        reference=f"order:{order.order_number}:admin-cancellation",
+                    )
+                    payment.refunded_amount += refund_amount
+                    if payment.refunded_amount >= payment.amount:
+                        payment.refunded_amount = payment.amount
+                        payment.payment_status = Payment.REFUNDED
+                    payment.pending_refund_amount = Decimal("0.00")
+                    payment.save(update_fields=[
+                        "refunded_amount", "pending_refund_amount", "payment_status",
+                    ])
+                    refund = {"amount": str(refund_amount), "method": "wallet"}
+
                 restore_order_stock(
                     order,
                     note=f"Cancelled by admin: order {order.order_number}",
@@ -246,4 +311,191 @@ class AdminOrderStatusView(APIView):
         return Response({
             "message": "Order updated successfully.",
             "order": AdminOrderDetailSerializer(order).data,
+            "refund": refund,
+        })
+
+
+class AdminOrderRefundStatusView(APIView):
+    permission_classes = [IsAdminUser]
+
+    @transaction.atomic
+    def post(self, request, order_id):
+        order = Order.objects.select_for_update().filter(pk=order_id).first()
+        if not order:
+            return Response({"detail": "Order not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        payment = (
+            Payment.objects.select_for_update()
+            .filter(order=order, payment_status=Payment.REFUND_PENDING)
+            .order_by("-created_at", "-id")
+            .first()
+        )
+        if (
+            not payment
+            or not payment.refund_id
+            or payment.payment_method not in {"upi", "card", "razorpay"}
+        ):
+            return Response(
+                {"detail": "There is no pending Razorpay refund to check."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not settings.RAZORPAY_KEY_ID or not settings.RAZORPAY_KEY_SECRET:
+            return Response(
+                {"detail": "Razorpay credentials are not configured."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            response = requests.get(
+                f"https://api.razorpay.com/v1/refunds/{payment.refund_id}",
+                auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET),
+                timeout=15,
+            )
+            response.raise_for_status()
+            refund = response.json()
+        except (requests.RequestException, ValueError):
+            logger.exception(
+                "Could not check Razorpay refund %s for order %s",
+                payment.refund_id,
+                order.order_number,
+            )
+            return Response(
+                {"detail": "Razorpay refund status could not be checked. Please try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        if not isinstance(refund, dict) or refund.get("id") != payment.refund_id:
+            return Response(
+                {"detail": "Razorpay returned an invalid refund record."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        provider_status = refund.get("status")
+        try:
+            refund_amount = Decimal(str(refund["amount"])) / Decimal("100")
+        except (KeyError, InvalidOperation, ValueError):
+            return Response(
+                {"detail": "Razorpay returned an invalid refund amount."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        if (
+            provider_status not in {"processed", "failed", "pending"}
+            or refund_amount <= 0
+            or refund_amount > payment.refunded_amount
+            or refund_amount > payment.amount
+            or (
+                payment.pending_refund_amount > 0
+                and refund_amount != payment.pending_refund_amount
+            )
+        ):
+            return Response(
+                {"detail": "Razorpay returned an unsupported refund status or amount."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        if provider_status == "failed":
+            payment.refunded_amount = max(
+                Decimal("0.00"),
+                payment.refunded_amount - refund_amount,
+            )
+            payment.pending_refund_amount = Decimal("0.00")
+            payment.payment_status = (
+                Payment.REFUNDED
+                if payment.refunded_amount >= payment.amount
+                else Payment.PAID
+            )
+        elif provider_status == "processed":
+            payment.pending_refund_amount = Decimal("0.00")
+            payment.payment_status = (
+                Payment.REFUNDED
+                if payment.refunded_amount >= payment.amount
+                else Payment.PAID
+            )
+        else:
+            payment.pending_refund_amount = refund_amount
+
+        payment.save(update_fields=[
+            "refunded_amount", "pending_refund_amount", "payment_status",
+        ])
+        return Response({
+            "message": f"Razorpay reports the refund is {provider_status}.",
+            "provider_status": provider_status,
+            "payment": AdminPaymentSerializer(payment).data,
+        })
+
+
+class AdminOrderWalletRefundView(APIView):
+    permission_classes = [IsAdminUser]
+
+    @transaction.atomic
+    def post(self, request, order_id):
+        order = Order.objects.select_for_update().filter(pk=order_id).first()
+        if not order:
+            return Response({"detail": "Order not found."}, status=status.HTTP_404_NOT_FOUND)
+        if order.order_status != Order.CANCELLED:
+            return Response(
+                {"detail": "A wallet refund is only available for cancelled orders."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not order.user_id:
+            return Response(
+                {"detail": "A guest order cannot be refunded to a customer wallet."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        payments = list(
+            Payment.objects.select_for_update()
+            .filter(order=order)
+            .order_by("-created_at", "-id")
+        )
+        if len(payments) != 1:
+            return Response(
+                {"detail": "A wallet refund requires exactly one payment record."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        payment = payments[0]
+        if payment.payment_status not in {Payment.PAID, Payment.REFUND_PENDING}:
+            return Response(
+                {"detail": "This payment is not eligible for a wallet refund."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        refund_amount = (
+            payment.amount
+            - payment.refunded_amount
+            + payment.pending_refund_amount
+        )
+        if refund_amount <= 0:
+            return Response(
+                {"detail": "There is no remaining paid amount to refund."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        wallet, _ = Wallet.objects.get_or_create(user=order.user)
+        wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
+        wallet.balance += refund_amount
+        wallet.save(update_fields=["balance", "updated_at"])
+        WalletTransaction.objects.create(
+            wallet=wallet,
+            transaction_type=WalletTransaction.CREDIT,
+            amount=refund_amount,
+            description=f"Admin refund for cancelled order {order.order_number}",
+            reference=f"order:{order.order_number}:admin-cancellation",
+        )
+        payment.refunded_amount = payment.amount
+        payment.pending_refund_amount = Decimal("0.00")
+        payment.payment_status = Payment.REFUNDED
+        payment.save(update_fields=[
+            "refunded_amount", "pending_refund_amount", "payment_status",
+        ])
+
+        return Response({
+            "message": "The remaining refund was credited to the customer's wallet.",
+            "refund": {"amount": str(refund_amount), "method": "wallet"},
+            "order": AdminOrderDetailSerializer(
+                _orders_with_latest_payment()
+                .prefetch_related("items", "payments", "history")
+                .get(pk=order.pk)
+            ).data,
         })

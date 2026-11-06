@@ -5,7 +5,8 @@ from .views import (
     CustomerOrderListView,
     CustomerOrderDetailView,
     CustomerOrderCancelView,
-    CustomerOrderReturnView,
+    CustomerOrderItemCancelView,
+    CustomerOrderItemReturnView,
     CustomerOrderItemReviewView,
     CustomerCheckoutView,
     CustomerAvailableCouponsView,
@@ -26,9 +27,14 @@ urlpatterns = [
         name="customer-order-cancel",
     ),
     path(
-        "<int:pk>/return/",
-        CustomerOrderReturnView.as_view(),
-        name="customer-order-return",
+        "<int:order_id>/items/<int:item_id>/cancel/",
+        CustomerOrderItemCancelView.as_view(),
+        name="customer-order-item-cancel",
+    ),
+    path(
+        "<int:order_id>/items/<int:item_id>/return/",
+        CustomerOrderItemReturnView.as_view(),
+        name="customer-order-item-return",
     ),
     path(
         "<int:order_id>/items/<int:item_id>/review/",

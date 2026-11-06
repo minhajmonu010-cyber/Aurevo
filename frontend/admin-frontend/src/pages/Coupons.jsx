@@ -18,6 +18,7 @@ const emptyForm = {
   description: "",
   discount_type: "percentage",
   discount_value: "",
+  max_discount_amount: "",
   minimum_order_amount: "0",
   usage_limit: "",
   start_date: "",
@@ -52,6 +53,7 @@ export default function Coupons() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState("");
+  const [validationErrorKey, setValidationErrorKey] = useState(null);
   const [saving, setSaving] = useState(false);
   const [copiedId, setCopiedId] = useState(null);
   const [couponToDelete, setCouponToDelete] = useState(null);
@@ -61,7 +63,41 @@ export default function Coupons() {
 
   const pageSize = 10;
 
-  const closeModal = useCallback(() => setModal(false), []);
+  const closeModal = useCallback(() => {
+    setModal(false);
+    setError("");
+    setValidationErrorKey(null);
+  }, []);
+  const showValidationError = (message, key) => {
+    setError(message);
+    setValidationErrorKey(key);
+  };
+  const validationErrorFixed = (key, values) => {
+    const discount = Number(values.discount_value);
+    if (key === "dates_required") return Boolean(values.start_date && values.end_date);
+    if (key === "date_order") {
+      return Boolean(values.start_date && values.end_date) &&
+        new Date(values.end_date) > new Date(values.start_date);
+    }
+    if (key === "discount_value") return Number.isFinite(discount) && discount > 0;
+    if (key === "discount_limit") return values.discount_type !== "percentage" || discount <= 100;
+    if (key === "max_discount_amount") {
+      return values.discount_type !== "percentage" ||
+        values.max_discount_amount === "" ||
+        (Number.isFinite(Number(values.max_discount_amount)) && Number(values.max_discount_amount) > 0);
+    }
+    if (key === "minimum_order_amount") {
+      const minimum = Number(values.minimum_order_amount);
+      return Number.isFinite(minimum) && minimum >= 0;
+    }
+    if (key === "code") return Boolean(values.code.trim());
+    if (key === "usage_limit") {
+      if (values.usage_limit === "") return true;
+      const limit = Number(values.usage_limit);
+      return Number.isInteger(limit) && limit >= 1;
+    }
+    return false;
+  };
 
   const loadCoupons = useCallback(async () => {
     try {
@@ -94,6 +130,7 @@ export default function Coupons() {
     setEditingId(null);
     setForm(emptyForm);
     setError("");
+    setValidationErrorKey(null);
     setModal(true);
   }
 
@@ -104,6 +141,7 @@ export default function Coupons() {
       description: coupon.description || "",
       discount_type: coupon.discount_type,
       discount_value: coupon.discount_value,
+      max_discount_amount: coupon.max_discount_amount ?? "",
       minimum_order_amount: coupon.minimum_order_amount,
       usage_limit: coupon.usage_limit ?? "",
       start_date: toLocalInput(coupon.start_date),
@@ -111,47 +149,72 @@ export default function Coupons() {
       is_active: coupon.is_active,
     });
     setError("");
+    setValidationErrorKey(null);
     setModal(true);
   }
 
   function changeField(event) {
     const { name, value, type, checked } = event.target;
+    const changedValue = type === "checkbox" ? checked : value;
 
     setForm((previous) => ({
       ...previous,
-      [name]: type === "checkbox" ? checked : value,
+      [name]: changedValue,
+      ...(name === "discount_type" && value === "fixed" ? { max_discount_amount: "" } : {}),
     }));
+    const nextForm = {
+      ...form,
+      [name]: changedValue,
+      ...(name === "discount_type" && value === "fixed" ? { max_discount_amount: "" } : {}),
+    };
+    if (error && modal && (!validationErrorKey || validationErrorFixed(validationErrorKey, nextForm))) {
+      setError("");
+      setValidationErrorKey(null);
+    }
   }
 
   async function handleSubmit(event) {
     event.preventDefault();
     setError("");
+    setValidationErrorKey(null);
 
     if (!form.start_date || !form.end_date) {
-      setError("Please select both validity dates.");
+      showValidationError("Please select both validity dates.", "dates_required");
       return;
     }
 
     if (new Date(form.end_date) <= new Date(form.start_date)) {
-      setError("End date must be after start date.");
+      showValidationError("End date must be after start date.", "date_order");
       return;
     }
 
     const value = Number(form.discount_value);
+    const maximumDiscount = form.max_discount_amount === ""
+      ? null
+      : Number(form.max_discount_amount);
     const minimum = Number(form.minimum_order_amount);
 
     if (!Number.isFinite(value) || value <= 0) {
-      setError("Enter a discount value greater than zero.");
+      showValidationError("Enter a discount value greater than zero.", "discount_value");
       return;
     }
 
     if (form.discount_type === "percentage" && value > 100) {
-      setError("Percentage discount cannot exceed 100.");
+      showValidationError("Percentage discount cannot exceed 100.", "discount_limit");
+      return;
+    }
+
+    if (
+      form.discount_type === "percentage" &&
+      maximumDiscount !== null &&
+      (!Number.isFinite(maximumDiscount) || maximumDiscount <= 0)
+    ) {
+      showValidationError("Maximum discount must be greater than zero.", "max_discount_amount");
       return;
     }
 
     if (!Number.isFinite(minimum) || minimum < 0) {
-      setError("Minimum order amount cannot be negative.");
+      showValidationError("Minimum order amount cannot be negative.", "minimum_order_amount");
       return;
     }
 
@@ -159,6 +222,7 @@ export default function Coupons() {
       ...form,
       code: form.code.trim().toUpperCase(),
       discount_value: value,
+      max_discount_amount: form.discount_type === "percentage" ? maximumDiscount : null,
       minimum_order_amount: minimum,
       usage_limit:
         form.usage_limit === "" ? null : Number(form.usage_limit),
@@ -167,7 +231,7 @@ export default function Coupons() {
     };
 
     if (!payload.code) {
-      setError("Coupon code is required.");
+      showValidationError("Coupon code is required.", "code");
       return;
     }
 
@@ -176,7 +240,7 @@ export default function Coupons() {
       (!Number.isInteger(payload.usage_limit) ||
         payload.usage_limit < 1)
     ) {
-      setError("Usage limit must be a positive whole number.");
+      showValidationError("Usage limit must be a positive whole number.", "usage_limit");
       return;
     }
 
@@ -190,6 +254,7 @@ export default function Coupons() {
       }
 
       setModal(false);
+      setValidationErrorKey(null);
       await loadCoupons();
     } catch (err) {
       const data = err.response?.data;
@@ -202,6 +267,7 @@ export default function Coupons() {
           ? firstError
           : "Could not save coupon. Please check your inputs."
       );
+      setValidationErrorKey(null);
     } finally {
       setSaving(false);
     }
@@ -262,8 +328,8 @@ export default function Coupons() {
         rows.push(...response.data.results);
       }
       downloadCsv("coupons.csv", [
-        ["Code", "Description", "Discount type", "Discount value", "Minimum order", "Used", "Usage limit", "Starts", "Ends", "Status"],
-        ...rows.map((coupon) => [coupon.code, coupon.description, coupon.discount_type, coupon.discount_value, coupon.minimum_order_amount, coupon.used_count, coupon.usage_limit ?? "Unlimited", coupon.start_date, coupon.end_date, coupon.status]),
+        ["Code", "Description", "Discount type", "Discount value", "Maximum discount", "Minimum order", "Used", "Usage limit", "Starts", "Ends", "Status"],
+        ...rows.map((coupon) => [coupon.code, coupon.description, coupon.discount_type, coupon.discount_value, coupon.max_discount_amount ?? "", coupon.minimum_order_amount, coupon.used_count, coupon.usage_limit ?? "Unlimited", coupon.start_date, coupon.end_date, coupon.status]),
       ]);
     } catch {
       setError("Could not export coupons.");
@@ -376,7 +442,7 @@ export default function Coupons() {
 
                   <td>
                     {coupon.discount_type === "percentage"
-                      ? `${coupon.discount_value}%`
+                      ? `${coupon.discount_value}%${coupon.max_discount_amount ? ` (max ${money(coupon.max_discount_amount)})` : ""}`
                       : money(coupon.discount_value)}
                   </td>
 
@@ -478,6 +544,22 @@ export default function Coupons() {
                     required
                   />
                 </label>
+
+                {form.discount_type === "percentage" && (
+                  <label>
+                    Maximum Discount (₹)
+                    <input
+                      name="max_discount_amount"
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={form.max_discount_amount}
+                      onChange={changeField}
+                      placeholder="No limit"
+                    />
+                    <small>Optional cap on the percentage discount.</small>
+                  </label>
+                )}
 
                 <label>
                   Minimum Order (₹)

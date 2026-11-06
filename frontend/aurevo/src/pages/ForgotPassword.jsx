@@ -51,7 +51,20 @@ export default function ForgotPassword() {
     >
       <form onSubmit={handleSubmit} noValidate>
         {formError && <div className="alert error" role="alert">{formError}</div>}
-        <Field label="Email Address" name="email" type="email" icon="mail" value={email} onChange={(e) => setEmail(e.target.value)} error={error} placeholder="name@company.com" autoComplete="email" />
+        <Field
+          label="Email Address"
+          name="email"
+          type="email"
+          icon="mail"
+          value={email}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            if (isEmail(e.target.value)) setError("");
+          }}
+          error={error}
+          placeholder="name@company.com"
+          autoComplete="email"
+        />
         <button className="btn primary" type="submit" disabled={submitting}>
           {submitting ? "Sending code..." : <>Send Code <Icon name="arrow-right" size={16} /></>}
         </button>

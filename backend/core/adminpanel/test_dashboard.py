@@ -13,6 +13,7 @@ from orders.models import Order, OrderItem, Payment
 
 URL = "/api/admin/dashboard/"
 ORDERS = "/api/admin/dashboard/orders/"
+SALES_REPORT = "/api/admin/dashboard/sales-report/"
 PASSWORD = "Adm1n-Store-2026"
 
 
@@ -163,6 +164,24 @@ class DashboardOrdersTests(DashboardBase):
         self.assertEqual((row["amount"], row["payment_status"], row["order_status"]), ("100.00", "paid", "delivered"))
         self.assertTrue(row["order_number"].startswith("AV-"))
 
+    def test_items_count_sums_quantities_without_order_items(self):
+        order = self.orders[0]
+        variant = self.variant()
+        OrderItem.objects.create(
+            order=order,
+            variant=variant,
+            category=self.category,
+            product_name=variant.product.name,
+            sku=variant.sku,
+            quantity=3,
+            price=variant.price,
+            total_price=variant.price * 3,
+        )
+
+        row = next(row for row in self.rows()["results"] if row["id"] == order.id)
+
+        self.assertEqual(row["items_count"], 3)
+
     def test_search_and_filters(self):
         self.assertEqual(self.rows("?search=julian")["count"], 3)
         self.assertEqual(self.rows("?search=ROSTOVA")["count"], 4)
@@ -192,3 +211,117 @@ class DashboardOrdersTests(DashboardBase):
         row = next(r for r in self.rows("?page_size=50")["results"] if r["id"] == order.id)
         self.assertEqual(row["payment_status"], "pending")
         self.assertEqual(row["customer"]["name"], "Deleted customer")
+
+
+class SalesReportTests(DashboardBase):
+    def report(self, start=None, end=None):
+        today = timezone.localdate()
+        return self.client.get(
+            SALES_REPORT,
+            {
+                "start": (start or today).isoformat(),
+                "end": (end or today).isoformat(),
+            },
+        )
+
+    def test_report_summarizes_paid_orders_products_and_payment_methods(self):
+        customer = self.customer()
+        variant = self.variant(size="M")
+        order = self.place(customer, 200, variant=variant, quantity=2)
+        Order.objects.filter(pk=order.pk).update(
+            discount_amount=Decimal("30.00"),
+            coupon_discount_amount=Decimal("10.00"),
+            shipping_charge=Decimal("5.00"),
+            coupon_code="SAVE10",
+        )
+        Payment.objects.filter(order=order).update(payment_method="upi")
+        self.place(customer, 900, payment="failed", variant=variant, quantity=9)
+
+        response = self.report()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["total_sales"], Decimal("200.00"))
+        self.assertEqual(response.data["payment_count"], 1)
+        self.assertEqual(response.data["paid_order_count"], 1)
+        self.assertEqual(response.data["average_order_value"], Decimal("200.00"))
+        self.assertEqual(response.data["units_sold"], 2)
+        self.assertEqual(response.data["product_revenue"], Decimal("200.00"))
+        self.assertEqual(response.data["product_count"], 1)
+        self.assertEqual(
+            response.data["product_sales"][0],
+            {
+                "product_name": "Tee",
+                "product_image": "",
+                "sku": variant.sku,
+                "size": "M",
+                "color": "Black",
+                "category__name": "Streetwear",
+                "units_sold": 2,
+                "revenue": Decimal("200.00"),
+                "average_unit_price": Decimal("100.00"),
+                "order_count": 1,
+            },
+        )
+        self.assertEqual(
+            response.data["payment_methods"],
+            [{"method": "upi", "payment_count": 1, "amount": Decimal("200.00")}],
+        )
+        self.assertEqual(
+            response.data["orders"][0],
+            {
+                "order_number": order.order_number,
+                "created_at": order.created_at,
+                "customer_name": "Julian Vance",
+                "customer_email": "julian.vance@example.com",
+                "shipping_address": {},
+                "order_status": "delivered",
+                "payment_method": "upi",
+                "payment_status": "paid",
+                "items": [
+                    {
+                        "product_name": "Tee",
+                        "sku": variant.sku,
+                        "size": "M",
+                        "color": "Black",
+                        "quantity": 2,
+                        "unit_price": Decimal("100.00"),
+                        "line_total": Decimal("200.00"),
+                        "is_cancelled": False,
+                    }
+                ],
+                "item_subtotal": Decimal("200.00"),
+                "product_offer_discount": Decimal("20.00"),
+                "coupon_code": "SAVE10",
+                "coupon_discount": Decimal("10.00"),
+                "total_discount": Decimal("30.00"),
+                "shipping_charge": Decimal("5.00"),
+                "order_total": Decimal("200.00"),
+                "paid_amount": Decimal("200.00"),
+                "payments": [
+                    {
+                        "method": "upi",
+                        "amount": Decimal("200.00"),
+                        "transaction_id": "",
+                        "paid_at": Payment.objects.get(order=order).paid_at,
+                    }
+                ],
+            },
+        )
+
+    def test_report_excludes_cancelled_items_and_refunds_and_validates_dates(self):
+        customer = self.customer()
+        variant = self.variant(size="L")
+        order = self.place(customer, 300, variant=variant, quantity=3)
+        OrderItem.objects.filter(order=order).update(is_cancelled=True)
+        self.place(customer, 500, payment=Payment.REFUNDED, variant=variant, quantity=5)
+
+        response = self.report()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["total_sales"], Decimal("300.00"))
+        self.assertEqual(response.data["paid_order_count"], 1)
+        self.assertEqual(response.data["units_sold"], 0)
+        self.assertEqual(response.data["product_sales"], [])
+        self.assertEqual(
+            self.client.get(SALES_REPORT, {"start": "not-a-date"}).status_code,
+            400,
+        )

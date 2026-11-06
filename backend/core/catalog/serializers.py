@@ -2,6 +2,7 @@ from rest_framework import serializers
 from adminpanel.models import Offer
 
 from .models import Category, Product, Review
+from .offer_pricing import offer_prices
 
 
 def file_url(request, field):
@@ -40,31 +41,23 @@ class CategorySerializer(serializers.ModelSerializer):
 
 class PublicOfferSerializer(serializers.ModelSerializer):
     target_names = serializers.SerializerMethodField()
+    target_slugs = serializers.SerializerMethodField()
 
     class Meta:
         model = Offer
         fields = (
             "id", "name", "description", "discount_type", "discount_value",
-            "applies_to", "target_ids", "target_names", "start_date", "end_date",
+            "applies_to", "target_ids", "target_names", "target_slugs",
+            "start_date", "end_date",
         )
 
     def get_target_names(self, obj):
-        if obj.applies_to == Offer.PRODUCTS:
-            names = Product.objects.filter(
-                pk__in=obj.target_ids,
-                is_active=True,
-                category__is_active=True,
-            ).values_list("id", "name")
-        elif obj.applies_to == Offer.CATEGORIES:
-            names = Category.objects.filter(
-                pk__in=obj.target_ids,
-                is_active=True,
-                is_system=False,
-            ).values_list("id", "name")
-        else:
-            return []
-        names_by_id = dict(names)
-        return [names_by_id[target_id] for target_id in obj.target_ids if target_id in names_by_id]
+        target_names = self.context.get("target_names", {})
+        return target_names.get(obj.pk, [])
+
+    def get_target_slugs(self, obj):
+        target_slugs = self.context.get("target_slugs", {})
+        return target_slugs.get(obj.pk, [])
 
 
 class CategoryBriefSerializer(serializers.ModelSerializer):
@@ -140,6 +133,7 @@ class ProductDetailSerializer(ProductListSerializer):
         ]
 
     def get_variants(self, obj):
+        pricing_by_variant = offer_prices(obj.active_variants)
         return [
             {
                 "id": variant.id,
@@ -149,6 +143,9 @@ class ProductDetailSerializer(ProductListSerializer):
                 "price": f"{variant.price:.2f}",
                 "original_price": f"{variant.original_price:.2f}" if variant.original_price else None,
                 "discount_percent": discount_percent(variant.price, variant.original_price),
+                "offer_price": f"{pricing_by_variant[variant.id]['price']:.2f}",
+                "offer_discount": f"{pricing_by_variant[variant.id]['discount']:.2f}",
+                "offer_name": pricing_by_variant[variant.id]["name"],
                 "stock": variant.stock,
                 "in_stock": variant.stock > 0,
             }
