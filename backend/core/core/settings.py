@@ -55,7 +55,9 @@ if not SECRET_KEY:
 
 ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
-    ("localhost", "127.0.0.1") if DEBUG else (),
+    ("localhost", "127.0.0.1")
+    if DEBUG
+    else ("aurevo-backend-api.ap-south-1.elasticbeanstalk.com",),
 )
 if not DEBUG and (not ALLOWED_HOSTS or "*" in ALLOWED_HOSTS):
     raise ImproperlyConfigured(
@@ -261,7 +263,9 @@ CORS_ALLOWED_ORIGINS = env_list(
         "http://127.0.0.1:5174",
         "http://127.0.0.1:5175",
         "http://127.0.0.1:3000",
-    ) if DEBUG else (),
+    )
+    if DEBUG
+    else ("https://main.d15ifl6xg8rmq1.amplifyapp.com",),
 )
 CSRF_TRUSTED_ORIGINS = env_list(
     "CSRF_TRUSTED_ORIGINS",
