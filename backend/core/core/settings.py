@@ -55,7 +55,7 @@ if not SECRET_KEY:
 
 ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
-    ("localhost", "127.0.0.1")
+    ("localhost", "127.0.0.1,aurevo-backend-api.ap-south-1.elasticbeanstalk.com")
     if DEBUG
     else ("aurevo-backend-api.ap-south-1.elasticbeanstalk.com",),
 )
