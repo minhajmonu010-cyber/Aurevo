@@ -30,7 +30,7 @@ const page = (Component) => (
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/admin">
       <AuthProvider>
         <ToastProvider>
           <Routes>
