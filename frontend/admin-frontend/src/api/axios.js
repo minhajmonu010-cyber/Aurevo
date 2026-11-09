@@ -1,6 +1,6 @@
 import axios from "axios";
 
-export const API_URL = import.meta.env.VITE_API_URL || "https://aurevo-backend-api.ap-south-1.elasticbeanstalk.com/api";
+export const API_URL = import.meta.env.VITE_API_URL || "https://api.minhaj.website/api";
 
 // different keys from the user app, so the two apps never share a session
 const ACCESS_KEY = "outfito_admin_access";

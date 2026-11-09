@@ -1,6 +1,6 @@
 import axios from "axios";
 
-export const API_URL = import.meta.env.VITE_API_URL || "https://aurevo-backend-api.ap-south-1.elasticbeanstalk.com/api";
+export const API_URL = import.meta.env.VITE_API_URL || "https://api.minhaj.website/api";
 
 const ACCESS_KEY = "Aurevo_access";
 const REFRESH_KEY = "aurevo_refresh";
