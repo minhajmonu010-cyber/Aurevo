@@ -8,13 +8,19 @@ applications:
           commands:
             - npm ci --prefix frontend/aurevo --cache .npm --prefer-offline
             - npm ci --prefix frontend/admin-frontend --cache .npm --prefer-offline
+
         build:
           commands:
-            - npm run build
+            - npm run build --prefix frontend/aurevo
+            - npm run build --prefix frontend/admin-frontend
+            - mkdir -p frontend/aurevo/dist/admin
+            - cp -r frontend/admin-frontend/dist/. frontend/aurevo/dist/admin/
+
       artifacts:
         baseDirectory: frontend/aurevo/dist
         files:
           - '**/*'
+
       cache:
         paths:
           - .npm/**/*
