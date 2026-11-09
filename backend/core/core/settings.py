@@ -55,10 +55,13 @@ if not SECRET_KEY:
 
 ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
-    ("localhost", "127.0.0.1,aurevo-backend-api.ap-south-1.elasticbeanstalk.com")
-    if DEBUG
-    else ("aurevo-backend-api.ap-south-1.elasticbeanstalk.com",),
+    (
+        "localhost",
+        "127.0.0.1",
+        "aurevo-backend-api.ap-south-1.elasticbeanstalk.com",
+    ),
 )
+
 if not DEBUG and (not ALLOWED_HOSTS or "*" in ALLOWED_HOSTS):
     raise ImproperlyConfigured(
         "Set ALLOWED_HOSTS to the production API hostnames; wildcard hosts are not allowed."
@@ -138,47 +141,71 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if DATABASE_URL:
-    parsed_database_url = urlsplit(DATABASE_URL)
-    if (
-        parsed_database_url.scheme not in {"postgres", "postgresql"}
-        or not parsed_database_url.hostname
-        or not parsed_database_url.path.strip("/")
-    ):
-        raise ImproperlyConfigured("DATABASE_URL must be a PostgreSQL connection URL.")
 
-    database_options = {
-        key: values[-1]
-        for key, values in parse_qs(parsed_database_url.query).items()
-    }
-    database_options.setdefault("sslmode", "require")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+if DATABASE_URL:
+    try:
+        parsed_database_url = urlsplit(DATABASE_URL)
+
+        if (
+            parsed_database_url.scheme not in {"postgres", "postgresql"}
+            or not parsed_database_url.hostname
+            or not parsed_database_url.path.strip("/")
+            or not parsed_database_url.username
+            or not parsed_database_url.password
+        ):
+            raise ImproperlyConfigured(
+                "DATABASE_URL must be a valid PostgreSQL connection URL."
+            )
+
+        # Validate the port separately so malformed URLs produce a clear error.
+        try:
+            database_port = parsed_database_url.port or 5432
+        except ValueError as exc:
+            raise ImproperlyConfigured(
+                "Invalid port in DATABASE_URL. Check your Neon connection string."
+            ) from exc
+
+        database_options = {
+            key: values[-1]
+            for key, values in parse_qs(parsed_database_url.query).items()
+        }
+        database_options.setdefault("sslmode", "require")
+
+        DATABASES = {
+            "default": {
+                "ENGINE": "django.db.backends.postgresql",
+                "NAME": unquote(parsed_database_url.path.lstrip("/")),
+                "USER": unquote(parsed_database_url.username),
+                "PASSWORD": unquote(parsed_database_url.password),
+                "HOST": parsed_database_url.hostname,
+                "PORT": database_port,
+                "OPTIONS": database_options,
+                "CONN_MAX_AGE": 60,
+                "CONN_HEALTH_CHECKS": True,
+                "DISABLE_SERVER_SIDE_CURSORS": True,
+            }
+        }
+
+    except ValueError as exc:
+        raise ImproperlyConfigured(
+            "Invalid DATABASE_URL. Check your PostgreSQL connection string."
+        ) from exc
+
+else:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": unquote(parsed_database_url.path.lstrip("/")),
-            "USER": unquote(parsed_database_url.username or ""),
-            "PASSWORD": unquote(parsed_database_url.password or ""),
-            "HOST": parsed_database_url.hostname,
-            "PORT": parsed_database_url.port or 5432,
-            "OPTIONS": database_options,
-            "CONN_MAX_AGE": 60,
+            "NAME": os.getenv("DB_NAME"),
+            "USER": os.getenv("DB_USER"),
+            "PASSWORD": os.getenv("DB_PASSWORD"),
+            "HOST": os.getenv("DB_HOST"),
+            "PORT": os.getenv("DB_PORT") or "5432",
             "CONN_HEALTH_CHECKS": True,
-            "DISABLE_SERVER_SIDE_CURSORS": True,
         }
     }
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('DB_NAME'),
-            'USER': os.getenv('DB_USER'),
-            'PASSWORD': os.getenv('DB_PASSWORD'),
-            'HOST': os.getenv('DB_HOST'),
-            'PORT': os.getenv('DB_PORT'),
-            'CONN_HEALTH_CHECKS': True,
-        }
-    }
+
 
 
 # Password validation
@@ -313,5 +340,5 @@ SOCIALACCOUNT_PROVIDERS={
 
 SOCIALACCOUNT_STORE_TOKENS=True
 
-MEDIA_URL="media/"
-MEDIA_ROOT=BASE_DIR / "media"
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
