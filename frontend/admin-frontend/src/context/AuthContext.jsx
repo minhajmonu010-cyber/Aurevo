@@ -2,6 +2,21 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import api, { tokens } from "../api/axios";
 
 const AuthContext = createContext(null);
+const SESSION_USER_KEY = "outfito_admin_session_user";
+
+function getCachedUser() {
+  const cachedUser = sessionStorage.getItem(SESSION_USER_KEY);
+  if (!cachedUser) return null;
+
+  try {
+    const user = JSON.parse(cachedUser);
+    return user?.is_staff ? user : null;
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    sessionStorage.removeItem(SESSION_USER_KEY);
+    return null;
+  }
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -18,16 +33,27 @@ export function AuthProvider({ children }) {
       }
       try {
         const { data } = await api.get("/admin/auth/me/");
-        if (active) setUser(data);
-      } catch {
-        tokens.clear(); // expired, or this account is no longer an admin
+        if (active) {
+          setUser(data);
+          sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(data));
+        }
+      } catch (error) {
+        if ([400, 401, 403].includes(error.response?.status)) {
+          tokens.clear();
+          sessionStorage.removeItem(SESSION_USER_KEY);
+        } else if (active) {
+          setUser(getCachedUser());
+        }
       } finally {
         if (active) setLoading(false);
       }
     }
 
     restore();
-    const onForcedLogout = () => setUser(null);
+    const onForcedLogout = () => {
+      sessionStorage.removeItem(SESSION_USER_KEY);
+      setUser(null);
+    };
     window.addEventListener("auth:logout", onForcedLogout);
     return () => {
       active = false;
@@ -38,6 +64,7 @@ export function AuthProvider({ children }) {
   const login = useCallback(async (email, password) => {
     const { data } = await api.post("/admin/auth/login/", { email, password });
     tokens.set(data.access, data.refresh);
+    sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(data.user));
     setUser(data.user);
     return data.user;
   }, []);
@@ -49,6 +76,7 @@ export function AuthProvider({ children }) {
       /* the server may be unreachable; still clear the local session */
     }
     tokens.clear();
+    sessionStorage.removeItem(SESSION_USER_KEY);
     setUser(null);
   }, []);
 

@@ -292,11 +292,14 @@ CORS_ALLOWED_ORIGINS = env_list(
         "http://127.0.0.1:3000",
     )
     if DEBUG
-    else ("https://main.d15ifl6xg8rmq1.amplifyapp.com",),
+    else ("https://main.d15ifl6xg8rmq1.amplifyapp.com","https://www.minhaj.website",
+        "https://admin.minhaj.website",),
 )
 CSRF_TRUSTED_ORIGINS = env_list(
     "CSRF_TRUSTED_ORIGINS",
-    CORS_ALLOWED_ORIGINS if DEBUG else (),
+    CORS_ALLOWED_ORIGINS if DEBUG else ( "https://main.d15ifl6xg8rmq1.amplifyapp.com",
+        "https://www.minhaj.website",
+        "https://admin.minhaj.website", "https://api.minhaj.website",),
 )
 
 CORS_ALLOW_CREDENTIALS=True

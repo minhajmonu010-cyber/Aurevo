@@ -57,8 +57,10 @@ api.interceptors.response.use(
         original.headers.Authorization = `Bearer ${data.access}`;
         return api(original);
       } catch (refreshError) {
-        tokens.clear();
-        window.dispatchEvent(new Event("auth:logout"));
+        if ([400, 401, 403].includes(refreshError.response?.status)) {
+          tokens.clear();
+          window.dispatchEvent(new Event("auth:logout"));
+        }
         return Promise.reject(refreshError);
       }
     }
